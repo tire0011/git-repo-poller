@@ -16,7 +16,9 @@ pwsh -File .\setup.ps1
 
 The wizard asks for a worker ID, Git repository/branch, a local `run.ps1` entrypoint, timeout, paths to ignore (e.g. generated results), polling interval, automatic poller updates and optional **current-user Windows Task Scheduler** registration. Only select trusted repositories whose scripts you intend to execute locally.
 
-Nothing is run automatically during installation. Before enabling scheduled runs, verify that the experiment script does not launch its own infinite watcher (the existing AI-Native Code Bench `run.ps1` starts a watcher unless called with `-NoWatch`; create a thin experiment-specific wrapper first).
+Nothing is run automatically during installation. Before enabling scheduled runs, verify that the experiment script does not launch its own infinite watcher (the existing AI-Native Code Bench `run.ps1` starts a watcher unless called with `-NoWatch`; use the `poller-run.ps1` adapter from [the source migration PR](https://github.com/tire0011/ai-native-code-bench/pull/4)).
+
+For the source benchmark use `entrypoint: poller-run.ps1` (not raw `run.ps1`). The adapter reuses `run.ps1 -NoWatch` and its existing result sync; see [the migration/parity guide](https://github.com/tire0011/ai-native-code-bench/blob/refactor/benchmark-poller-adapter/docs/git-repo-poller-migration.md). The generic polling engine was ported from the benchmark watcher but still needs this real-project integration before it can replace the original watcher. Old and new watchers must never run concurrently.
 
 ### Commands
 
