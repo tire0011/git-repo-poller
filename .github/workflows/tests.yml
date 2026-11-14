@@ -1,0 +1,26 @@
+name: PowerShell smoke tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check PowerShell and Git
+        run: |
+          $PSVersionTable.PSVersion.ToString()
+          git --version
+      - name: Parse configuration without running tasks
+        run: ./poll.ps1 -ConfigPath ./examples/config.example.json -CheckOnly
+      - name: Two temporary Git experiment repositories
+        run: ./tests/Smoke.Tests.ps1
