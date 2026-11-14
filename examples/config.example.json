@@ -1,6 +1,6 @@
 {
   "workerId": "home-gpu",
-  "intervalMinutes": 5,
+  "intervalSeconds": 30,
   "autoUpdate": false,
   "engineRemote": "https://github.com/tire0011/git-repo-poller.git",
   "engineBranch": "main",

@@ -125,6 +125,14 @@ def normalize_experiment(job: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _interval_seconds(raw: Dict[str, Any]) -> int:
+    if raw.get("intervalSeconds"):
+        return max(5, int(raw["intervalSeconds"]))
+    if raw.get("intervalMinutes"):  # older configs
+        return max(5, int(raw["intervalMinutes"]) * 60)
+    return 30
+
+
 def load_config(path: Path) -> Dict[str, Any]:
     if not path.is_file():
         raise PollerError(f"Configuration not found: {path}")
@@ -141,7 +149,7 @@ def validate_config(raw: Dict[str, Any]) -> Dict[str, Any]:
         raise PollerError("Duplicate experiment ids in configuration")
     return {
         "workerId": worker,
-        "intervalMinutes": max(1, int(raw.get("intervalMinutes") or 5)),
+        "intervalSeconds": _interval_seconds(raw),
         # Self-update is opt-in: every engine commit is code that runs as you.
         "autoUpdate": raw.get("autoUpdate") is True,
         "engineRemote": str(raw.get("engineRemote") or "").strip(),

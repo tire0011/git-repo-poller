@@ -1,4 +1,4 @@
-"""Command line: check | poll | launch | setup | sync-results."""
+"""Command line: check | poll | launch | watch | setup | sync-results."""
 from __future__ import annotations
 
 import argparse
@@ -30,6 +30,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true")
     p.add_argument("--no-update", action="store_true")
 
+    p = sub.add_parser("watch", help="keep running: one launch tick every intervalSeconds (Ctrl+C stops)")
+    p.add_argument("--install-root", default=str(default_install_root()))
+    p.add_argument("--no-update", action="store_true")
+
     p = sub.add_parser("setup", help="install / repair / pause / resume / uninstall")
     p.add_argument("--install-root", default=str(default_install_root()))
     p.add_argument("--non-interactive", action="store_true")
@@ -40,8 +44,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--uninstall", action="store_true")
     p.add_argument("--pause", action="store_true")
     p.add_argument("--resume", action="store_true")
-    p.add_argument("--scheduled-task", action="store_true")
-    p.add_argument("--no-scheduled-task", action="store_true")
 
     p = sub.add_parser("sync-results", help="commit+push allowlisted result paths of one checkout")
     p.add_argument("--repo", required=True)
@@ -64,12 +66,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             return poll.poll(Path(args.config), args.only, args.force)
         if args.command == "launch":
             return launcher.launch(Path(args.install_root), args.only, args.force, args.no_update)
+        if args.command == "watch":
+            return launcher.watch(Path(args.install_root), args.no_update)
         if args.command == "setup":
             return installer.setup(
                 Path(args.install_root), non_interactive=args.non_interactive or args.repair,
                 config_source=args.config, add=args.add_experiment, dry_run=args.dry_run,
-                uninstall=args.uninstall, pause=args.pause, resume=args.resume,
-                scheduled_task=args.scheduled_task, no_scheduled_task=args.no_scheduled_task or args.repair)
+                uninstall=args.uninstall, pause=args.pause, resume=args.resume)
         if args.command == "sync-results":
             sync_results.sync(Path(args.repo).resolve(), args.branch, args.expected_remote,
                               args.result_path, commit_pending=not args.no_commit)

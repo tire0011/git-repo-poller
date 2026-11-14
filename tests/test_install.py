@@ -1,6 +1,9 @@
 import json
+import os
 import shutil
 import subprocess
+import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -24,11 +27,11 @@ class InstallTests(GitTestCase):
         return self.cli("setup", "--install-root", str(self.root), *extra)
 
     def install(self):
-        r = self.setup_cli("--non-interactive", "--config", str(self.source_cfg), "--no-scheduled-task")
+        r = self.setup_cli("--non-interactive", "--config", str(self.source_cfg))
         self.assertEqual(r.returncode, 0, r.stdout)
 
     def launch(self, *extra):
-        # Run from the INSTALLED bootstrap copy, like the scheduled task does.
+        # Run from the INSTALLED bootstrap copy, like watch does.
         return self.cli("launch", "--install-root", str(self.root), *extra, pythonpath=self.root, cwd=self.root)
 
     def current(self):
@@ -44,11 +47,12 @@ class InstallTests(GitTestCase):
         self.assertEqual(self.setup_cli("--non-interactive").returncode, 1)
 
     def test_interactive_wizard(self):
-        answers = "\n".join(["wiz", "7", "n", "demo", self.exp_repo, "main", "run.py", "30", "n", "", "", "n", "n"])
+        answers = "\n".join(["wiz", "7", "n", "demo", self.exp_repo, "main", "run.py", "30", "n", "", "", "n"])
         r = self.cli("setup", "--install-root", str(self.root), stdin=answers + "\n")
         self.assertEqual(r.returncode, 0, r.stdout)
         cfg = json.loads((self.root / "config.json").read_text())
-        self.assertEqual((cfg["workerId"], cfg["intervalMinutes"], cfg["autoUpdate"]), ("wiz", 7, False))
+        self.assertEqual((cfg["workerId"], cfg["intervalSeconds"], cfg["autoUpdate"]), ("wiz", 7, False))
+        self.assertIn(" watch ", r.stdout)
         self.assertEqual(cfg["experiments"][0]["runMode"], "on_change")
 
     def test_install_launch_self_update_and_fallback(self):
@@ -95,6 +99,38 @@ class InstallTests(GitTestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("dirty", r.stdout)
 
+    def test_watch_keeps_polling_until_stopped(self):
+        cfg = json.loads(self.source_cfg.read_text())
+        cfg["intervalSeconds"] = 5
+        self.source_cfg.write_text(json.dumps(cfg))
+        self.install()
+        env = dict(os.environ, PYTHONPATH=str(self.root))
+        proc = subprocess.Popen([sys.executable, "-m", "git_repo_poller", "watch", "--install-root",
+                                 str(self.root)], cwd=str(self.root), env=env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            self.wait_for(lambda: self.run_count(self.root, "exp") == 1)
+            self.commit(self.exp_seed, {"code.txt": "v2"}, "v2")
+            self.wait_for(lambda: self.run_count(self.root, "exp") == 2)
+        finally:
+            proc.kill()
+            proc.wait()
+
+    def wait_for(self, condition, timeout=30):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if condition():
+                return
+            time.sleep(0.3)
+        self.fail("condition not reached in time")
+
+    def test_legacy_interval_minutes(self):
+        cfg = json.loads(self.source_cfg.read_text())
+        cfg["intervalMinutes"] = 2
+        self.source_cfg.write_text(json.dumps(cfg))
+        self.install()
+        self.assertEqual(json.loads((self.root / "config.json").read_text())["intervalSeconds"], 120)
+
     def test_pause_resume_repair_uninstall(self):
         self.install()
         self.setup_cli("--pause")
@@ -138,7 +174,7 @@ class WrapperTests(GitTestCase):
                                                     "entrypoint": "run.py"}], engineRemote=engine)
         root = self.tmp / "inst"
         r = self.pwsh(REPO_ROOT / "poller.ps1", "setup", "--install-root", str(root), "--non-interactive",
-                      "--config", str(cfg), "--no-scheduled-task")
+                      "--config", str(cfg))
         self.assertEqual(r.returncode, 0, r.stdout)
         r = self.pwsh(root / "poller.ps1", "launch", "--install-root", str(root))
         self.assertEqual(r.returncode, 0, r.stdout)

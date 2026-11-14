@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List
 
-from .common import ID_PATTERN, PollerError, git, load_config, load_json, normalize_experiment, validate_config
+from .common import ID_PATTERN, PollerError, git, load_config, normalize_experiment, validate_config
 
 DEFAULT_ENGINE_REMOTE = "https://github.com/tire0011/git-repo-poller.git"
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -68,50 +68,6 @@ def add_experiments(config: Dict[str, Any], ui: Prompter) -> None:
             return
 
 
-def _task_name(worker_id: str) -> str:
-    return f"GitRepoPoller-{worker_id}"
-
-
-def _pwsh(script: str, env: Dict[str, str]) -> None:
-    pwsh = shutil.which("pwsh")
-    if not pwsh:
-        raise PollerError("PowerShell 7 (pwsh) is required to manage the scheduled task")
-    proc = subprocess.run([pwsh, "-NoProfile", "-NonInteractive", "-Command", script],
-                          env=dict(os.environ, **env))
-    if proc.returncode != 0:
-        raise PollerError("Scheduled task command failed")
-
-
-def register_task(root: Path, config: Dict[str, Any]) -> None:
-    if platform.system() != "Windows":
-        raise PollerError("Windows Task Scheduler is available only on Windows")
-    # Values travel as environment variables, so paths with spaces need no quoting tricks.
-    script = r"""
-$ErrorActionPreference = 'Stop'
-$pwshExe = (Get-Command pwsh).Source
-$arg = '-NoProfile -NonInteractive -WindowStyle Hidden -File "' + $env:GRP_WRAPPER + '" launch --install-root "' + $env:GRP_ROOT + '"'
-$action = New-ScheduledTaskAction -Execute $pwshExe -Argument $arg -WorkingDirectory $env:GRP_ROOT
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes ([int]$env:GRP_INTERVAL))
-$principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
-$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 12) -StartWhenAvailable
-Register-ScheduledTask -TaskName $env:GRP_TASK -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-"""
-    _pwsh(script, {"GRP_WRAPPER": str(root / "poller.ps1"), "GRP_ROOT": str(root),
-                   "GRP_INTERVAL": str(config["intervalMinutes"]), "GRP_TASK": _task_name(config["workerId"])})
-    print(f"Scheduled task registered (current user): {_task_name(config['workerId'])}")
-
-
-def unregister_task(worker_id: str) -> None:
-    if platform.system() != "Windows":
-        return
-    script = ("$t = Get-ScheduledTask -TaskName $env:GRP_TASK -ErrorAction SilentlyContinue; "
-              "if ($t) { Unregister-ScheduledTask -TaskName $env:GRP_TASK -Confirm:$false }")
-    try:
-        _pwsh(script, {"GRP_TASK": _task_name(worker_id)})
-    except PollerError:
-        print(f"WARNING: could not remove scheduled task {_task_name(worker_id)}; remove it manually")
-
-
 def _install_bootstrap(root: Path) -> None:
     target = root / "git_repo_poller"
     tmp = root / ".git_repo_poller.tmp"
@@ -141,8 +97,7 @@ def _to_json(config: Dict[str, Any]) -> str:
 
 
 def setup(root: Path, *, non_interactive: bool = False, config_source: str = "", add: bool = False,
-          dry_run: bool = False, uninstall: bool = False, pause: bool = False, resume: bool = False,
-          scheduled_task: bool = False, no_scheduled_task: bool = False) -> int:
+          dry_run: bool = False, uninstall: bool = False, pause: bool = False, resume: bool = False) -> int:
     root = root.resolve()
     installed = root / "config.json"
     ui = Prompter(not non_interactive)
@@ -156,12 +111,10 @@ def setup(root: Path, *, non_interactive: bool = False, config_source: str = "",
         print("Poller resumed.")
         return 0
     if uninstall:
-        if installed.exists():
-            unregister_task(str(load_json(installed).get("workerId", "")))
         installed.unlink(missing_ok=True)
         (root / "poller.ps1").unlink(missing_ok=True)
         shutil.rmtree(root / "git_repo_poller", ignore_errors=True)
-        print(f"Uninstalled wrapper/config/task. Workspaces, runs, state and engine kept in {root}")
+        print(f"Uninstalled wrapper and config (stop a running watch with Ctrl+C). Workspaces, runs, state and engine kept in {root}")
         return 0
     if not shutil.which("git"):
         raise PollerError("Git is required (Windows: winget install Git.Git)")
@@ -176,7 +129,7 @@ def setup(root: Path, *, non_interactive: bool = False, config_source: str = "",
         worker = ui.ask("Worker ID (e.g. home-gpu)", platform.node().lower() or "worker")
         config = {
             "workerId": worker,
-            "intervalMinutes": int(ui.ask("Polling interval (minutes)", "5")),
+            "intervalSeconds": int(ui.ask("Check for changes every N seconds", "30")),
             "autoUpdate": ui.ask_bool("Automatically update the poller itself from its Git repository? "
                                       "(every commit there then runs on this machine)", False),
             "engineRemote": DEFAULT_ENGINE_REMOTE, "engineBranch": "main", "experiments": [],
@@ -195,18 +148,18 @@ def setup(root: Path, *, non_interactive: bool = False, config_source: str = "",
     for job in tmp_check["experiments"]:
         print(f"  {job['id']}: {job['repo']} [{job['branch']}] -> {job['entrypoint']} ({job['runMode']})")
     if dry_run:
-        print("DRY RUN: configuration checked; nothing cloned, run, scheduled or written.")
+        print("DRY RUN: configuration checked; nothing cloned, run or written.")
         return 0
 
     root.mkdir(parents=True, exist_ok=True)
     _ensure_engine(root, tmp_check)
     _install_bootstrap(root)
     installed.write_text(_to_json(tmp_check), encoding="utf-8")
-    if scheduled_task or (not no_scheduled_task and ui.ask_bool("Register current-user scheduled task?", False)):
-        register_task(root, tmp_check)
     wrapper = root / "poller.ps1"
     print(f"Installed. Config: {installed}")
     print(f'Check:     pwsh -File "{wrapper}" check --config "{installed}"')
+    print(f'Start:     pwsh -File "{wrapper}" watch --install-root "{root}"   (checks every '
+          f'{tmp_check["intervalSeconds"]} s, Ctrl+C stops)')
     print(f'Run once:  pwsh -File "{wrapper}" launch --install-root "{root}"')
     print(f'Pause:     pwsh -File "{wrapper}" setup --install-root "{root}" --pause')
     print(f'Uninstall: pwsh -File "{wrapper}" setup --install-root "{root}" --uninstall')

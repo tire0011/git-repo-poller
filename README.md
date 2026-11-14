@@ -1,14 +1,14 @@
 # Git Repo Poller
 
-A **small Git poller** that keeps approved experiment checkouts current and runs each experiment's own entrypoint when its repository changes. The implementation is **Python 3.10+ (standard library only)**; `poller.ps1` is the single PowerShell wrapper for Windows and Task Scheduler.
+A **small Git poller** that keeps approved experiment checkouts current and runs each experiment's own entrypoint when its repository changes. The implementation is **Python 3.10+ (standard library only)**; `poller.ps1` is the single PowerShell wrapper. It runs as a normal app in a terminal and checks for changes every 30 seconds (no Task Scheduler, no service).
 
 The idea: experiments are prepared as Git repositories (by you or by agents), and a worker machine picks them up and runs them locally. The poller needs no GPU, AI model or mailbox. Each experiment owns its commands, dependencies and models.
 
-**Status:** implemented and covered by offline tests on Linux (Python and the PowerShell wrapper). CI runs the same tests on Windows. Task Scheduler registration has not been verified on a real Windows machine yet.
+**Status:** implemented and covered by offline tests on Linux (Python and the PowerShell wrapper). CI runs the same tests on Windows. Not yet tried on a real Windows worker machine.
 
 ```text
-Windows Task Scheduler (optional, opt-in)
-  └── poller.ps1 launch           (stable bootstrap copy in the install folder)
+poller.ps1 watch                  (runs until Ctrl+C; one tick every intervalSeconds)
+  └── launch                      (stable bootstrap copy in the install folder)
         ├── optional engine self-update between ticks, last-known-good fallback
         └── poll tick (one thread + one lock per experiment)
               ├── experiment A: fetch, ff-only, run.py / run.ps1 → runs/A/<time>-<sha>/
@@ -33,11 +33,12 @@ cd git-repo-poller
 pwsh -File .\poller.ps1 setup
 ```
 
-The wizard asks for a worker ID, polling interval, self-update (default no) and experiments, then optionally registers a **current-user** scheduled task (default no). Nothing runs during setup. Everything is installed under `%LOCALAPPDATA%\GitRepoPoller`.
+The wizard asks for a worker ID, polling interval, self-update (default no) and experiments, and prints the start command. Nothing runs during setup. Everything is installed under `%LOCALAPPDATA%\GitRepoPoller`.
 
 ```powershell
 $p = "$env:LOCALAPPDATA\GitRepoPoller\poller.ps1"
 pwsh -File $p check --config "$env:LOCALAPPDATA\GitRepoPoller\config.json"  # validate only
+pwsh -File $p watch                                    # keep running, check every 30 s (Ctrl+C stops)
 pwsh -File $p launch                                   # one tick
 pwsh -File $p launch --only local-benchmark --force    # explicit rerun of one experiment
 pwsh -File .\poller.ps1 setup --add-experiment
@@ -54,7 +55,7 @@ Without PowerShell (any OS): `python -m git_repo_poller <command> ...` from the 
 ```json
 {
   "workerId": "home-gpu",
-  "intervalMinutes": 5,
+  "intervalSeconds": 30,
   "autoUpdate": false,
   "engineRemote": "https://github.com/tire0011/git-repo-poller.git",
   "engineBranch": "main",
@@ -74,6 +75,7 @@ Without PowerShell (any OS): `python -m git_repo_poller <command> ...` from the 
 }
 ```
 
+- `intervalSeconds`: pause between ticks in `watch` (default 30, minimum 5; older `intervalMinutes` is converted).
 - `entrypoint` / `verifyEntry`: a `.py` (run with the poller's Python) or `.ps1` (run with `pwsh`) file **inside** the checkout.
 - `runMode`: `on_change` (default) runs on the first check and after commits that touch paths outside `ignorePaths`/`resultPaths`. `every_tick` runs on every tick. The old `runOnChange: false` is read as `every_tick`.
 - `resultPaths` (opt-in): result folders that are committed and pushed **before** each update. Only result-only commits are ever rebased or pushed. Empty means the poller never commits or pushes.
@@ -94,7 +96,7 @@ Status per experiment is in `state/<id>.json`: `succeeded`, `failed`, `timed_out
 - Never `git reset --hard`, force-push or overwrite dirty/diverged checkouts; they are reported as `error` and left untouched.
 - The configured `origin` and branch must match exactly.
 - Experiments run in parallel, each with its own lock and timeout (the whole process tree is killed on timeout). Overlapping ticks skip busy experiments.
-- Scheduled tasks, self-update and result publishing are opt-in.
+- Self-update and result publishing are opt-in. Nothing runs in the background: the poller runs only while `watch` is open.
 
 ## AI Native Code Bench
 
@@ -106,7 +108,7 @@ Use `entrypoint: poller-run.ps1` with `resultPaths`/`ignorePaths` `results/runs/
 python -m unittest discover -v -s tests -t .
 ```
 
-Offline only: temporary local bare Git remotes and dummy entrypoints. Covers two experiments, updates, unchanged/ignored commits, dirty and diverged checkouts, failures, timeouts, verification, parallel runs and locks, interrupted runs, offline resume, result sync, installer modes, self-update with fallback and the PowerShell wrapper (if `pwsh` is installed).
+Offline only: temporary local bare Git remotes and dummy entrypoints. Covers two experiments, updates, unchanged/ignored commits, dirty and diverged checkouts, failures, timeouts, verification, parallel runs and locks, interrupted runs, offline resume, result sync, installer modes, the `watch` loop, self-update with fallback and the PowerShell wrapper (if `pwsh` is installed).
 
 ## Boundaries
 

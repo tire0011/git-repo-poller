@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import List
 
@@ -113,3 +114,23 @@ def launch(root: Path, only: str = "", force: bool = False, no_update: bool = Fa
         args.append("--force")
     return _python_in(snap, args).returncode
 
+
+
+def watch(root: Path, no_update: bool = False) -> int:
+    """Long-running mode: a launch tick, then sleep intervalSeconds, until Ctrl+C."""
+    root = root.resolve()
+    print(f"Watching {root} (Ctrl+C stops)", flush=True)
+    try:
+        while True:
+            interval = 30
+            try:
+                interval = load_config(root / "config.json")["intervalSeconds"]
+                launch(root, no_update=no_update)
+            except PollerError as exc:
+                # Keep running: offline, a broken config edit etc. may be fixed meanwhile.
+                print(f"ERROR: {exc}", file=sys.stderr, flush=True)
+            sys.stdout.flush()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("Stopped.")
+        return 0
