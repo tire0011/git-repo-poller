@@ -24,3 +24,5 @@ jobs:
         run: ./poll.ps1 -ConfigPath ./examples/config.example.json -CheckOnly
       - name: Two temporary Git experiment repositories
         run: ./tests/Smoke.Tests.ps1
+      - name: Benchmark-derived results synchronization (offline)
+        run: ./tests/ResultSync.Tests.ps1
