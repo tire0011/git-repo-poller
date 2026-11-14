@@ -4,7 +4,7 @@ param()
 $ErrorActionPreference = 'Stop'
 $root = Join-Path ([IO.Path]::GetTempPath()) ('git-poller-smoke-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $root | Out-Null
-function Git([string]$Where, [string[]]$GitArgs) {
+function Invoke-TestGit([string]$Where, [string[]]$GitArgs) {
     $result = @(& git -C $Where @GitArgs 2>&1)
     if ($LASTEXITCODE -ne 0) { throw "git $($GitArgs -join ' ') failed: $($result -join ' ')" }
     return (($result | Out-String).Trim())
@@ -26,10 +26,10 @@ Add-Content -LiteralPath (Join-Path $env:GIT_POLLER_RUN_DIR "ID-marker.txt") -Va
 Write-Output "dummy experiment completed"
 '@.Replace('ID', $id)
         Set-Content -LiteralPath (Join-Path $seed 'run.ps1') -Value $script -Encoding utf8
-        $null = Git $seed @('add','run.ps1')
-        $null = Git $seed @('-c','user.name=Smoke','-c','user.email=smoke@example.test','commit','-m','first')
-        $null = Git $seed @('branch','-M','main')
-        $null = Git $seed @('push','origin','main')
+        $null = Invoke-TestGit $seed @('add','run.ps1')
+        $null = Invoke-TestGit $seed @('-c','user.name=Smoke','-c','user.email=smoke@example.test','commit','-m','first')
+        $null = Invoke-TestGit $seed @('branch','-M','main')
+        $null = Invoke-TestGit $seed @('push','origin','main')
         $profiles += [pscustomobject]@{
             id = $id; repo = $bare; branch = 'main'; entrypoint = 'run.ps1'
             timeoutSeconds = 10; runOnChange = $true; ignorePaths = @('results/')
@@ -51,18 +51,18 @@ Write-Output "dummy experiment completed"
     }
     $alphaSeed = Join-Path $root 'alpha-seed'
     Set-Content -LiteralPath (Join-Path $alphaSeed 'change.txt') -Value 'changed'
-    $null = Git $alphaSeed @('add','change.txt')
-    $null = Git $alphaSeed @('-c','user.name=Smoke','-c','user.email=smoke@example.test','commit','-m','change-alpha')
-    $null = Git $alphaSeed @('push','origin','main')
+    $null = Invoke-TestGit $alphaSeed @('add','change.txt')
+    $null = Invoke-TestGit $alphaSeed @('-c','user.name=Smoke','-c','user.email=smoke@example.test','commit','-m','change-alpha')
+    $null = Invoke-TestGit $alphaSeed @('push','origin','main')
     & $poll -ConfigPath $configPath | Out-Null
     Assert ((Get-Content -LiteralPath (Join-Path $root 'logs/alpha-marker.txt')).Count -eq 2) 'alpha updated and reran'
     Assert ((Get-Content -LiteralPath (Join-Path $root 'logs/beta-marker.txt')).Count -eq 1) 'beta unaffected'
     $results = Join-Path $alphaSeed 'results'
     New-Item -ItemType Directory -Force -Path $results | Out-Null
     Set-Content -LiteralPath (Join-Path $results 'metrics.txt') -Value 'no rerun'
-    $null = Git $alphaSeed @('add','results/metrics.txt')
-    $null = Git $alphaSeed @('-c','user.name=Smoke','-c','user.email=smoke@example.test','commit','-m','results-only')
-    $null = Git $alphaSeed @('push','origin','main')
+    $null = Invoke-TestGit $alphaSeed @('add','results/metrics.txt')
+    $null = Invoke-TestGit $alphaSeed @('-c','user.name=Smoke','-c','user.email=smoke@example.test','commit','-m','results-only')
+    $null = Invoke-TestGit $alphaSeed @('push','origin','main')
     & $poll -ConfigPath $configPath | Out-Null
     Assert ((Get-Content -LiteralPath (Join-Path $root 'logs/alpha-marker.txt')).Count -eq 2) 'results-only commit ignored'
     $alphaClone = Join-Path $root 'workspaces/alpha'
