@@ -16,14 +16,16 @@ if (-not (Test-Path -LiteralPath (Join-Path $RepoPath '.git'))) { throw "Not a G
 if (-not $ResultPaths -or $ResultPaths.Count -eq 0) { throw 'Explicit result paths required' }
 $prefixes = @($ResultPaths | ForEach-Object {
     $p = [string]$_
-    $p = $p.Replace('\', '/').Trim().Trim('/')
+    $p = $p.Replace('\', '/').Trim()
+    if ($p.StartsWith('/') -or $p -match '^[A-Za-z]:') { throw "Absolute result path not allowed: $_" }
+    $p = $p.Trim('/')
     if (-not $p -or $p -eq '.' -or $p -match '(^|/)\.\.(/|$)' -or $p.StartsWith('/') -or $p.Contains('*')) {
         throw "Unsafe result path: $_"
     }
     $p + '/'
 })
 function Is-ResultPath([string]$Path) {
-    $p = $Path.Replace('\', '/').TrimStart('./')
+    $p = $Path.Replace('\', '/').TrimStart([char[]]@('.','/'))
     foreach ($prefix in $prefixes) {
         if ($p.StartsWith($prefix, [StringComparison]::Ordinal)) { return $true }
     }
