@@ -1,54 +1,87 @@
 # Git Repo Poller
 
-A **minimal Windows PowerShell 7 Git poller** for running local, explicitly configured experiment commands when a trusted repository changes.
+A **small Windows PowerShell 7 polling/bootstrap tool**. Its one job is to keep approved Git experiment checkouts current and invoke their own `run.ps1`. It does not need Docker, Python, a GPU, an LLM or the Nexus mailbox.
 
-**Status: design / bootstrap phase — not yet implemented.** This repository currently contains project metadata and the implementation specification, not a working poller or installer.
+**Status:** MVP implementation proposed in a PR; not yet tested on a real Windows machine. The user-facing setup and Task Scheduler path require Windows testing before enabling unattended experiments.
 
-## What it will do
+## Quick setup (Windows)
 
-1. Poll an approved Git repository and fetch updates.
-2. Safely fast-forward a clean experiment checkout, without discarding local work.
-3. Optionally execute one configured local entry point (for example, `run.ps1`) when the relevant revision changes.
-4. Record run status and logs locally; optionally use a separate, explicit results publisher.
-
-Each experiment owns its commands, tests, dependencies and model configuration. The poller itself stays small, requires **no GPU or AI model**, and lives outside the experiment checkouts. Its own updates take effect *between* runs.
-
-```text
-Windows Task Scheduler
-        |
-        v
-git-repo-poller (stable install)
-        +----> approved experiment A repo ---> run.ps1
-        +----> approved experiment B repo ---> run.ps1
-        |
-        '---> local run status / logs
-```
-
-## Setup — planned
-
-The intended Windows installation is one interactive wizard:
+Prerequisites: PowerShell 7 and Git for Windows, with credentials for any **private experiment repository**. Public poller repo:
 
 ```powershell
+git clone https://github.com/tire0011/git-repo-poller.git
+cd git-repo-poller
 pwsh -File .\setup.ps1
 ```
 
-It will ask for a worker ID, approved repository URLs, folders, Git polling interval and optional **current-user** Task Scheduler integration. It should validate prerequisites, support non-interactive automation, test connectivity, and offer repair, pause/resume and uninstall without deleting user results by default.
+The wizard asks for a worker ID, Git repository/branch, a local `run.ps1` entrypoint, timeout, paths to ignore (e.g. generated results), polling interval, automatic poller updates and optional **current-user Windows Task Scheduler** registration. Only select trusted repositories whose scripts you intend to execute locally.
 
-**Important:** `setup.ps1` does **not exist yet**. Please follow the implementation issue before attempting installation. Do not run arbitrary install scripts copied from third-party comments.
+Nothing is run automatically during installation. Before enabling scheduled runs, verify that the experiment script does not launch its own infinite watcher (the existing AI-Native Code Bench `run.ps1` starts a watcher unless called with `-NoWatch`; create a thin experiment-specific wrapper first).
 
-## Separation of responsibilities
+### Commands
 
-- **Poller:** Git update + configured entry-point invocation + local status.
-- **Experiment repository:** `run.ps1`, optional `verify.ps1`, models and experiment-specific logic.
-- **Mailbox (later integration):** addressed task delivery and replies, not execution logic; see [agent-lab-mailbox#7](https://github.com/tire0011/agent-lab-mailbox/issues/7).
-- **Corporate use:** use a company-authorized internal remote and isolated credentials; never publish proprietary code, prompts or logs to this public repository.
+```powershell
+# Review configuration without changing anything:
+pwsh -File .\setup.ps1 -DryRun
 
-## Development and origin
+# Register an additional experiment interactively:
+pwsh -File .\setup.ps1 -AddExperiment
 
-The extraction originates from [ai-native-code-bench issue #3](https://github.com/tire0011/ai-native-code-bench/issues/3), including its existing `watch.ps1`, `watch-loop.ps1`, and `sync-results.ps1` behavior.
+# Manual poll: updates Git and runs changed experiments:
+pwsh -File "$env:LOCALAPPDATA\GitRepoPoller\launcher.ps1"
 
-Implementation belongs in this standalone repository, with source benchmark backward compatibility and verified tests. See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md) before submitting changes.
+# Run a specific experiment again (explicit request):
+pwsh -File "$env:LOCALAPPDATA\GitRepoPoller\launcher.ps1" -Only local-benchmark -Force
 
-## License
+# Pause / resume without removing workspaces or history:
+pwsh -File .\setup.ps1 -Pause
+pwsh -File .\setup.ps1 -Resume
 
-[MIT License](LICENSE) © 2026 Rene Tittel. When importing code from other projects, review its contributor rights and third-party license notices before reuse.
+# Repair installation or uninstall launcher/task (keep workspaces/results):
+pwsh -File .\setup.ps1 -Repair
+pwsh -File .\setup.ps1 -Uninstall
+```
+
+The local-only `config.json` is stored under `%LOCALAPPDATA%\GitRepoPoller` (not in the public repository). For scripted installs:
+
+```powershell
+pwsh -File .\setup.ps1 -NonInteractive -ConfigPath .\examples\config.example.json -DryRun
+# Remove -DryRun only after adapting the repository URLs and entrypoints.
+```
+
+## How it works
+
+```text
+Task Scheduler (optional)
+    └── installed launcher.ps1 (stable; never self-overwritten during execution)
+          ├── fetch/fast-forward poller engine, read-only check + keep last known good snapshot
+          └── poll.ps1
+                ├── experiment A: fetch + ff-only + approved run.ps1
+                └── experiment B: fetch + ff-only + approved run.ps1
+
+Local to installation: config.json, state/*.json, logs/, workspaces/, versions/
+```
+
+- A single PowerShell iteration checks every configured repository. A local mutex prevents overlapping ticks.
+- Existing worktrees must have the exact configured `origin`, branch and a **clean** working tree. No reset, rebase, force-push or destructive cleanup.
+- A first run executes once; later runs execute only if a new commit changes paths outside `ignorePaths`. `-Force` explicitly reruns one or all experiments.
+- No automatic rerun of a failed job on every tick; a failed commit is recorded and must be retried manually or after a new change.
+- A fixed `.ps1` entrypoint inside the checkout runs with a timeout in a separate PowerShell process. `verifyEntry` is optional. Logs/state stay **outside** the experiment checkout in the poller installation; scripts can write to `$env:GIT_POLLER_RUN_DIR`.
+- No result-publishing feature in v1. Experiment-specific `run.ps1` may publish results itself **only if intentionally configured**. Never upload internal/company information to public GitHub.
+- The poller engine can update independently of experiments between ticks. The launcher snapshots validated engine scripts in `versions/`. Old snapshots are kept for manual recovery; there is no hot code patching.
+
+## Offline synthetic verification
+
+```powershell
+pwsh -File .\tests\Smoke.Tests.ps1
+```
+
+Creates **two temporary local bare Git remotes**, checks initial run, unchanged commits, selective update, `results/`-only commit (no rerun), and dirty working tree preservation. No network, paid models or cloud services. The temporary remotes are removed afterward.
+
+For the source benchmark extraction and compatibility plan see [ai-native-code-bench#3](https://github.com/tire0011/ai-native-code-bench/issues/3); implementation task is [#1](https://github.com/tire0011/git-repo-poller/issues/1).
+
+## Boundaries
+
+The **Mailbox** delivers tasks/replies and can separately provide an owner-enabled CommandHandler. This **Git Repo Poller** only invokes locally configured experiment scripts. Do not add a second mailbox, remote free-form command execution, or an agent framework to this project.
+
+[MIT License](LICENSE) © 2026 Rene Tittel.
