@@ -6,9 +6,9 @@ This project is in the initial implementation stage. Please discuss significant 
 
 ## Development guidelines
 
-- Target **Windows with PowerShell 7**; avoid elevated privileges by default.
+- Target **Windows** first (Python 3.9+, PowerShell 7 for the wrapper); keep Linux working. Avoid elevated privileges by default.
 - Keep the poller small and independent from any experiment, LLM provider or mailbox transport.
-- Add automated tests using temporary local Git repositories and inexpensive dummy entrypoints. No cloud services or GPU should be needed to run the normal test suite.
+- Add `unittest` tests using temporary local Git repositories and inexpensive dummy entrypoints (`python -m unittest discover -s tests -t .`). No cloud services or GPU should be needed.
 - Include a dry-run path for installer and update operations. Preserve the user's existing files and Git changes.
 - Do not commit credentials, local configurations, private workspace contents, unredacted command output, or company data.
 - Document any prerequisite, expected command, behavior change and rollback procedure.

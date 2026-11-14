@@ -8,6 +8,7 @@ Please avoid posting exploits, credentials or sensitive system details in public
 
 ## Security model to preserve
 
+- Anyone who can push to a configured branch (experiment repositories, and the poller repository when `autoUpdate` is on) can run code on the worker. Protect those branches; `autoUpdate` stays off by default. The engine check before switching versions is not a security gate.
 - Trust and allowlist repository remotes and local entrypoints; do not execute shell text supplied by untrusted messages or remote task bodies.
 - Validate remote/revision identity before updating; reject dirty/diverged trees rather than silently overwriting user work.
 - Never copy local credentials, environment contents, proprietary source, model prompts or unredacted logs into a public repository.

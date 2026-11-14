@@ -1,0 +1,28 @@
+{
+  "workerId": "home-gpu",
+  "intervalMinutes": 5,
+  "autoUpdate": false,
+  "engineRemote": "https://github.com/tire0011/git-repo-poller.git",
+  "engineBranch": "main",
+  "experiments": [
+    {
+      "id": "local-benchmark",
+      "repo": "https://github.com/tire0011/ai-native-code-bench.git",
+      "branch": "main",
+      "entrypoint": "poller-run.ps1",
+      "timeoutSeconds": 3600,
+      "runMode": "on_change",
+      "ignorePaths": ["results/runs/", "results/logs/"],
+      "resultPaths": ["results/runs/", "results/logs/"]
+    },
+    {
+      "id": "demo-python",
+      "repo": "https://example.invalid/your-org/your-experiment.git",
+      "branch": "main",
+      "entrypoint": "run.py",
+      "verifyEntry": "verify.py",
+      "timeoutSeconds": 600,
+      "runMode": "on_change"
+    }
+  ]
+}

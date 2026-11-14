@@ -1,0 +1,24 @@
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ["3.9", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit and integration tests (local temporary Git remotes only)
+        run: python -m unittest discover -v -s tests -t .
+      - name: PowerShell wrapper smoke check
+        shell: pwsh
+        run: ./poller.ps1 check --config ./examples/config.example.json

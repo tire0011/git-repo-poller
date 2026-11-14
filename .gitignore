@@ -34,3 +34,10 @@ node_modules/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Poller install layout (when installed into a checkout by mistake)
+runs/
+versions/
+engine/
+current-version.txt
+paused.flag
