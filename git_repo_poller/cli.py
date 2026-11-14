@@ -53,8 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    if sys.version_info < (3, 9):
-        print("Python 3.9 or newer is required", file=sys.stderr)
+    if sys.version_info < (3, 10):
+        print("Python 3.10 or newer is required", file=sys.stderr)
         return 2
     args = build_parser().parse_args(argv)
     try:

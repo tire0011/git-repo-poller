@@ -104,8 +104,12 @@ Register-ScheduledTask -TaskName $env:GRP_TASK -Action $action -Trigger $trigger
 def unregister_task(worker_id: str) -> None:
     if platform.system() != "Windows":
         return
-    _pwsh("Unregister-ScheduledTask -TaskName $env:GRP_TASK -Confirm:$false -ErrorAction SilentlyContinue",
-          {"GRP_TASK": _task_name(worker_id)})
+    script = ("$t = Get-ScheduledTask -TaskName $env:GRP_TASK -ErrorAction SilentlyContinue; "
+              "if ($t) { Unregister-ScheduledTask -TaskName $env:GRP_TASK -Confirm:$false }")
+    try:
+        _pwsh(script, {"GRP_TASK": _task_name(worker_id)})
+    except PollerError:
+        print(f"WARNING: could not remove scheduled task {_task_name(worker_id)}; remove it manually")
 
 
 def _install_bootstrap(root: Path) -> None:

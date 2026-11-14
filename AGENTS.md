@@ -1,6 +1,6 @@
 # Agent development instructions
 
-This project is a **small Git repo poller**, implemented in Python 3.9+ (standard library only) with `poller.ps1` as the only PowerShell file (a wrapper). It is not a new autonomous AI framework. Read [README.md](README.md) and [the source extraction issue](https://github.com/tire0011/ai-native-code-bench/issues/3) before editing.
+This project is a **small Git repo poller**, implemented in Python 3.10+ (standard library only) with `poller.ps1` as the only PowerShell file (a wrapper). It is not a new autonomous AI framework. Read [README.md](README.md) and [the source extraction issue](https://github.com/tire0011/ai-native-code-bench/issues/3) before editing.
 
 ## Scope
 

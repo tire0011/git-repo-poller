@@ -13,7 +13,7 @@ if ($env:GIT_POLLER_PYTHON) {
 } elseif (Get-Command python -ErrorAction SilentlyContinue) {
     $exe = 'python'; $pre = @()
 } else {
-    Write-Error 'Python 3.9+ is required. Windows: winget install Python.Python.3.12'
+    Write-Error 'Python 3.10+ is required. Windows: winget install Python.Python.3.12'
     exit 2
 }
 $sep = [IO.Path]::PathSeparator

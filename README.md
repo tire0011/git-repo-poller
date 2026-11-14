@@ -1,6 +1,6 @@
 # Git Repo Poller
 
-A **small Git poller** that keeps approved experiment checkouts current and runs each experiment's own entrypoint when its repository changes. The implementation is **Python 3.9+ (standard library only)**; `poller.ps1` is the single PowerShell wrapper for Windows and Task Scheduler.
+A **small Git poller** that keeps approved experiment checkouts current and runs each experiment's own entrypoint when its repository changes. The implementation is **Python 3.10+ (standard library only)**; `poller.ps1` is the single PowerShell wrapper for Windows and Task Scheduler.
 
 The idea: experiments are prepared as Git repositories (by you or by agents), and a worker machine picks them up and runs them locally. The poller needs no GPU, AI model or mailbox. Each experiment owns its commands, dependencies and models.
 
@@ -25,7 +25,7 @@ Windows Task Scheduler (optional, opt-in)
 
 ## Setup (Windows)
 
-Prerequisites: Git for Windows, PowerShell 7, Python 3.9+ (`winget install Git.Git`, `winget install Microsoft.PowerShell`, `winget install Python.Python.3.12`), and credentials for private experiment repositories.
+Prerequisites: Git for Windows, PowerShell 7, Python 3.10+ (`winget install Git.Git`, `winget install Microsoft.PowerShell`, `winget install Python.Python.3.12`), and credentials for private experiment repositories.
 
 ```powershell
 git clone https://github.com/tire0011/git-repo-poller.git
