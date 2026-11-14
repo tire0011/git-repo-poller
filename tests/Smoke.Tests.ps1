@@ -71,7 +71,34 @@ Write-Output "dummy experiment completed"
     $last = Get-Content -LiteralPath (Join-Path $root 'state/alpha.json') -Raw | ConvertFrom-Json
     Assert ($last.status -eq 'error') 'dirty tree refused'
     Assert (Test-Path -LiteralPath (Join-Path $alphaClone 'untracked.txt')) 'dirty file preserved'
-    Write-Output 'SMOKE PASS: two remotes, first-run/no-change, selective update, results-only skip, dirty-tree preservation.'
+    # Smoke-test the installer and stable launcher with a third, local Git remote.
+    $engineBare = Join-Path $root 'poller-engine.git'
+    $engineSeed = Join-Path $root 'poller-engine-seed'
+    & git init --bare $engineBare | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Engine bare init failed' }
+    & git clone $engineBare $engineSeed 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Engine clone failed' }
+    $sourceRoot = Split-Path -Parent $PSScriptRoot
+    Copy-Item -LiteralPath (Join-Path $sourceRoot 'poll.ps1') -Destination (Join-Path $engineSeed 'poll.ps1')
+    Copy-Item -LiteralPath (Join-Path $sourceRoot 'launcher.ps1') -Destination (Join-Path $engineSeed 'launcher.ps1')
+    $null = Invoke-TestGit $engineSeed @('add','poll.ps1','launcher.ps1')
+    $null = Invoke-TestGit $engineSeed @('-c','user.name=Smoke','-c','user.email=smoke@example.test','commit','-m','engine-v1')
+    $null = Invoke-TestGit $engineSeed @('branch','-M','main')
+    $null = Invoke-TestGit $engineSeed @('push','origin','main')
+    $config['engineRemote'] = $engineBare
+    $config['engineBranch'] = 'main'
+    $config['intervalMinutes'] = 5
+    $config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $configPath -Encoding utf8
+    $install = Join-Path $root 'installed poller with spaces'
+    & (Join-Path $sourceRoot 'setup.ps1') -NonInteractive -ConfigPath $configPath -InstallRoot $install -NoScheduledTask
+    Assert (Test-Path -LiteralPath (Join-Path $install 'launcher.ps1')) 'installer copied stable launcher'
+    Assert (Test-Path -LiteralPath (Join-Path $install 'engine/.git')) 'installer cloned engine'
+    & (Join-Path $install 'launcher.ps1') -InstallRoot $install -CheckOnly | Out-Null
+    & (Join-Path $install 'launcher.ps1') -InstallRoot $install -Only beta -Force | Out-Null
+    $betaMarker = Join-Path $install 'logs/beta-marker.txt'
+    Assert (Test-Path -LiteralPath $betaMarker) 'launcher executed beta in a separate installed workspace'
+    Assert ((Get-Content -LiteralPath $betaMarker).Count -eq 1) 'launcher ran beta exactly once'
+    Write-Output 'SMOKE PASS: two remotes, selective changes, ignored results, dirty preservation, unattended installation and launcher.'
 } finally {
     Remove-Item -LiteralPath $root -Force -Recurse -ErrorAction SilentlyContinue
 }
