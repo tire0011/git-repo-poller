@@ -51,17 +51,21 @@ if (@($staged | Where-Object { -not (Is-ResultPath ([string]$_)) }).Count -gt 0)
 if ($CommitPending) {
     $pending = @(Invoke-RepoGit (@('status', '--porcelain', '--') + $ResultPaths) | Where-Object { $_ })
     if ($pending.Count -gt 0) {
-        # Only stage paths with changes; leave every other file untouched.
-        $candidatePaths = @()
-        foreach ($line in $pending) {
-            $path = ([string]$line).Substring(3).Trim('"')
-            if (-not (Is-ResultPath $path)) { throw "Unexpected pending path: $path" }
-            $candidatePaths += $path
+        # Stage approved directories directly, as in the original benchmark
+        # synchronizer. Parsing porcelain file names is unsafe for spaces and
+        # quoted Git paths; staging only the selected result paths avoids that.
+        $stagePaths = @()
+        foreach ($resultPath in $ResultPaths) {
+            $inCheckout = Join-Path $RepoPath ([string]$resultPath)
+            $knownFiles = @(Invoke-RepoGit @('ls-files', '--', ([string]$resultPath)) | Where-Object { $_ })
+            if ((Test-Path -LiteralPath $inCheckout) -or $knownFiles.Count -gt 0) {
+                $stagePaths += [string]$resultPath
+            }
         }
-        if ($candidatePaths.Count -gt 0) {
-            Invoke-RepoGit (@('add', '-A', '--') + $candidatePaths) | Out-Null
+        if ($stagePaths.Count -gt 0) {
+            Invoke-RepoGit (@('add', '-A', '--') + $stagePaths) | Out-Null
             Invoke-RepoGit @('commit', '-m', ('Experiment results ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))) | Out-Null
-            Write-Output "Committed $($candidatePaths.Count) result-path change(s)."
+            Write-Output "Committed changes under approved result paths."
         }
     }
 }
