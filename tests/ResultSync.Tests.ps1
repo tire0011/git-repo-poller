@@ -53,6 +53,9 @@ Set-Content -LiteralPath (Join-Path $PSScriptRoot "results/runs/result-$count.tx
     Assert (@(Get-Content -LiteralPath $marker).Count -eq 1) 'first run count'
     $checkout = Join-Path $root 'workspaces/bench'
     Assert (Test-Path -LiteralPath (Join-Path $checkout 'results/runs/result-0.txt')) 'first result missing'
+    # Local result commits use the same author configuration as a real worker.
+    $null = G $checkout @('config','user.name','BenchTest')
+    $null = G $checkout @('config','user.email','bench@example.test')
 
     # 2. Pre-poll result sync commits/pushes ONLY result data and never reruns.
     & $poll -ConfigPath $configFile | Out-Null
