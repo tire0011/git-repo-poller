@@ -1,0 +1,36 @@
+# Local user configuration and credentials
+config.local.json
+*.local.json
+*.secrets.json
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+
+# Local runtime state, logs and experiment artifacts
+logs/
+state/
+local-results/
+results/local/
+workspaces/
+checkouts/
+tmp/
+temp/
+*.log
+*.pid
+*.lock
+
+# Tool caches and virtual environments
+.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
+.tools/
+
+# Editor/OS
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
