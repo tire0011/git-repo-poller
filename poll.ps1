@@ -100,6 +100,18 @@ try {
             if ($origin -ne $repo) { throw "Wrong Git remote for $id`: '$origin' (expected '$repo')" }
             $currentBranch = Invoke-Git $dir @('branch','--show-current')
             if ($currentBranch -ne $branch) { throw "Wrong branch for $id`: '$currentBranch'" }
+            # Reused from AI-Native Code Bench: reconcile pending RESULT-ONLY
+            # changes and commits before fetch/fast-forward. This is strictly
+            # opt-in per experiment; ordinary repos never auto-commit or push.
+            $resultPaths = @($job.resultPaths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+            if ($resultPaths.Count -gt 0) {
+                $syncScript = Join-Path $PSScriptRoot 'sync-results.ps1'
+                if (-not (Test-Path -LiteralPath $syncScript)) {
+                    throw 'Result sync helper missing from installed poller version'
+                }
+                & $syncScript -RepoPath $dir -Branch $branch -ExpectedRemote $repo -ResultPaths $resultPaths -CommitPending
+                if (-not $?) { throw "Result sync failed for $id; leaving checkout untouched" }
+            }
             $dirty = Invoke-Git $dir @('status','--porcelain','--untracked-files=all')
             if ($dirty) { throw "Dirty workspace for $id; refusing to pull or discard local changes" }
             $null = Invoke-Git $dir @('fetch','origin',$branch,'--quiet')
@@ -109,7 +121,8 @@ try {
             $shouldRun = $Force -or -not $previous -or ($job.runOnChange -eq $false)
             if (-not $shouldRun -and $previous -ne $sha) {
                 $changes = @( (Invoke-Git $dir @('diff','--name-only',$previous,$sha,'--')) -split "`n" | Where-Object { $_ })
-                $ignored = @($job.ignorePaths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+                # Result commits are never a reason to rerun the experiment.
+                $ignored = @($job.ignorePaths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) + $resultPaths
                 $relevant = @($changes | Where-Object {
                     $path = $_
                     @($ignored | Where-Object { $path.StartsWith([string]$_, [StringComparison]::OrdinalIgnoreCase) }).Count -eq 0
