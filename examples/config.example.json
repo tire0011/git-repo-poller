@@ -9,7 +9,7 @@
       "id": "local-benchmark",
       "repo": "https://github.com/tire0011/ai-native-code-bench.git",
       "branch": "main",
-      "entrypoint": "run.ps1",
+      "entrypoint": "poller-run.ps1",
       "timeoutSeconds": 3600,
       "runOnChange": true,
       "ignorePaths": ["results/", "local-results/"]
