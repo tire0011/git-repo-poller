@@ -57,7 +57,8 @@ function Add-ExperimentWizard([object]$Settings) {
         $url = Ask 'Trusted Git repository URL'
         if (-not $url) { Write-Warning 'Git URL cannot be empty'; continue }
         $branch = Ask 'Branch' 'main'
-        $isBench = $url -match '/ai-native-code-bench(?:\.git)?
+        $isBench = $url -match '(^|/)ai-native-code-bench(\.git)?$'
+        $entry = Ask 'Entrypoint inside the repo' $(if ($isBench) { 'poller-run.ps1' } else { 'run.ps1' })
         $seconds = [int](Ask 'Command timeout in seconds' '600')
         $onChange = Ask-Bool 'Run only when Git changes (first check also runs)?' $true
         $resultDefaults = if ($isBench) { 'results/runs/,results/logs/' } else { '' }
