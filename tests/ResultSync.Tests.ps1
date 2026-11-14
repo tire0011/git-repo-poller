@@ -23,7 +23,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $PSScriptRoot 'results/runs
 $counter = Join-Path $env:GIT_POLLER_RUN_DIR 'launch-count.txt'
 $count = if (Test-Path -LiteralPath $counter) { @(Get-Content -LiteralPath $counter).Count } else { 0 }
 Add-Content -LiteralPath $counter -Value 'run'
-Set-Content -LiteralPath (Join-Path $PSScriptRoot "results/runs/result-$count.txt") -Value "result $count"
+Set-Content -LiteralPath (Join-Path $PSScriptRoot "results/runs/result $count.txt") -Value "result $count"
 '@ | Set-Content -LiteralPath (Join-Path $seed 'run.ps1') -Encoding utf8
     'initial code' | Set-Content -LiteralPath (Join-Path $seed 'code.txt')
     $null = G $seed @('add','run.ps1','code.txt')
@@ -52,7 +52,7 @@ Set-Content -LiteralPath (Join-Path $PSScriptRoot "results/runs/result-$count.tx
     Assert (Test-Path -LiteralPath $marker) 'first run missing'
     Assert (@(Get-Content -LiteralPath $marker).Count -eq 1) 'first run count'
     $checkout = Join-Path $root 'workspaces/bench'
-    Assert (Test-Path -LiteralPath (Join-Path $checkout 'results/runs/result-0.txt')) 'first result missing'
+    Assert (Test-Path -LiteralPath (Join-Path $checkout 'results/runs/result 0.txt')) 'first result missing'
     # Local result commits use the same author configuration as a real worker.
     $null = G $checkout @('config','user.name','BenchTest')
     $null = G $checkout @('config','user.email','bench@example.test')
@@ -61,7 +61,7 @@ Set-Content -LiteralPath (Join-Path $PSScriptRoot "results/runs/result-$count.tx
     & $poll -ConfigPath $configFile | Out-Null
     Assert (@(Get-Content -LiteralPath $marker).Count -eq 1) 'result-only update caused rerun'
     $pushedResult = G $checkout @('ls-tree','-r','--name-only','origin/main','--','results/runs/')
-    Assert (($pushedResult -join '') -match 'result-0.txt') 'results were not published'
+    Assert (($pushedResult -join '') -match 'result 0.txt') 'results were not published'
 
     # 3. A new remote *code* commit causes the expected next run.
     $null = G $seed @('fetch','origin','main')
@@ -83,7 +83,7 @@ Set-Content -LiteralPath (Join-Path $PSScriptRoot "results/runs/result-$count.tx
     & $poll -ConfigPath $configFile | Out-Null
     Assert (@(Get-Content -LiteralPath $marker).Count -eq 3) 'code change + pending result did not run once'
     $pushedResults = @(G $checkout @('ls-tree','-r','--name-only','origin/main','--','results/runs/'))
-    Assert (($pushedResults -join ',') -match 'result-1.txt') 'pending result lost during rebase'
+    Assert (($pushedResults -join ',') -match 'result 1.txt') 'pending result lost during rebase'
 
     # 5. Results from the third run should publish without a fourth run.
     & $poll -ConfigPath $configFile | Out-Null
