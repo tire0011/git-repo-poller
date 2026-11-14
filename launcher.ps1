@@ -56,6 +56,13 @@ try {
         New-Item -ItemType Directory -Path (Split-Path -Parent $candidatePath) -Force | Out-Null
         Copy-Item -LiteralPath (Join-Path $engine 'poll.ps1') -Destination $candidatePath -Force
     }
+    # Copy the optional reusable sync helper into the SAME immutable snapshot.
+    # A running tick never reads a new engine version midway through execution.
+    $syncSource = Join-Path $engine 'sync-results.ps1'
+    $syncSnapshot = Join-Path (Split-Path -Parent $candidatePath) 'sync-results.ps1'
+    if ((Test-Path -LiteralPath $syncSource) -and -not (Test-Path -LiteralPath $syncSnapshot)) {
+        Copy-Item -LiteralPath $syncSource -Destination $syncSnapshot
+    }
     # A new engine is only selected after its read-only config smoke test passes.
     $psExe = (Get-Command pwsh -ErrorAction Stop).Source
     $probe = & $psExe -NoProfile -NonInteractive -File $candidatePath -ConfigPath $configPath -CheckOnly 2>&1
