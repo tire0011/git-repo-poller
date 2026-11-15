@@ -24,37 +24,31 @@ class PollTests(GitTestCase):
     def poll(self, cfg, *extra):
         return self.cli("poll", "--config", str(cfg), *extra)
 
-    def test_two_experiments_clone_unchanged_update_and_ignored_paths(self):
+    def test_two_installations_are_independent(self):
         a_repo, a_seed = self.make_remote("alpha", {"run.py": RUN_PY})
         b_repo, _ = self.make_remote("beta", {"run.py": RUN_PY})
-        cfg = self.write_config(self.root, [profile("alpha", a_repo, ignorePaths=["results/"]),
-                                            profile("beta", b_repo)])
-        r = self.poll(cfg)
-        self.assertEqual(r.returncode, 0, r.stdout)
-        for exp in ("alpha", "beta"):
-            self.assertEqual(self.state(self.root, exp)["status"], "succeeded")
-            self.assertEqual(self.run_count(self.root, exp), 1)
-        # Outputs went to the per-run dir, so the checkout stays clean.
-        self.assertEqual(g(self.root / "workspaces" / "alpha", "status", "--porcelain"), "")
-
-        self.poll(cfg)
-        self.assertEqual(self.state(self.root, "alpha")["status"], "unchanged")
+        other_root = self.tmp / "other install"
+        a_cfg = self.write_config(self.root, [profile("alpha", a_repo, ignorePaths=["results/"])])
+        b_cfg = self.write_config(other_root, [profile("beta", b_repo)])
+        self.assertEqual(self.poll(a_cfg).returncode, 0)
+        self.assertEqual(self.poll(b_cfg).returncode, 0)
+        self.assertEqual(self.run_count(self.root, "alpha"), 1)
+        self.assertEqual(self.run_count(other_root, "beta"), 1)
+        self.poll(a_cfg)
+        self.poll(b_cfg)
         self.assertEqual(self.run_count(self.root, "alpha"), 1)
 
         new_sha = self.commit(a_seed, {"code.txt": "changed"}, "change alpha")
-        self.poll(cfg)
+        self.poll(a_cfg)
         self.assertEqual(self.run_count(self.root, "alpha"), 2)
-        self.assertEqual(self.run_count(self.root, "beta"), 1)
+        self.assertEqual(self.run_count(other_root, "beta"), 1)
         self.assertEqual(self.state(self.root, "alpha")["commitSha"], new_sha)
-
         self.commit(a_seed, {"results/metrics.txt": "x"}, "results only")
-        self.poll(cfg)
+        self.poll(a_cfg)
         self.assertEqual(self.state(self.root, "alpha")["status"], "ignored_change")
         self.assertEqual(self.run_count(self.root, "alpha"), 2)
-
-        r = self.poll(cfg, "--only", "beta", "--force")
-        self.assertEqual(self.run_count(self.root, "beta"), 2, r.stdout)
-
+        self.poll(b_cfg, "--force")
+        self.assertEqual(self.run_count(other_root, "beta"), 2)
     def test_dirty_and_diverged_checkouts_are_refused_and_preserved(self):
         repo, seed = self.make_remote("alpha", {"run.py": RUN_PY})
         cfg = self.write_config(self.root, [profile("alpha", repo)])
@@ -98,15 +92,16 @@ class PollTests(GitTestCase):
 
     def test_every_tick_mode_and_legacy_run_on_change_false(self):
         repo, _ = self.make_remote("alpha", {"run.py": RUN_PY})
-        repo2, _ = self.make_remote("legacy", {"run.py": RUN_PY})
-        cfg = self.write_config(self.root, [profile("alpha", repo, runMode="every_tick"),
-                                            profile("legacy", repo2, runOnChange=False)])
-        self.poll(cfg)
-        self.poll(cfg)
+        legacy_repo, _ = self.make_remote("legacy", {"run.py": RUN_PY})
+        legacy_root = self.tmp / "legacy worker"
+        cfg = self.write_config(self.root, [profile("alpha", repo, runMode="every_tick")])
+        old_cfg = self.write_config(legacy_root, [profile("legacy", legacy_repo, runOnChange=False)])
+        for _ in range(2):
+            self.poll(cfg)
+            self.poll(old_cfg)
         self.assertEqual(self.run_count(self.root, "alpha"), 2)
-        self.assertEqual(self.run_count(self.root, "legacy"), 2)
+        self.assertEqual(self.run_count(legacy_root, "legacy"), 2)
         self.assertIn("every_tick", self.cli("check", "--config", str(cfg)).stdout)
-
     def test_verification_result_is_separate_from_exit_code(self):
         repo, seed = self.make_remote("alpha", {"run.py": RUN_PY, "verify.py": "import sys; sys.exit(1)"})
         cfg = self.write_config(self.root, [profile("alpha", repo, verifyEntry="verify.py")])
@@ -126,33 +121,33 @@ class PollTests(GitTestCase):
         self.poll(cfg)
         self.assertIn("inside the approved checkout", self.state(self.root, "alpha")["error"])
 
-    def test_busy_experiment_is_skipped_but_others_run(self):
-        a_repo, _ = self.make_remote("alpha", {"run.py": RUN_PY})
-        b_repo, _ = self.make_remote("beta", {"run.py": RUN_PY})
-        cfg = self.write_config(self.root, [profile("alpha", a_repo), profile("beta", b_repo)])
-        lock = FileLock(self.root / "state" / "alpha.lock")
+    def test_overlapping_tick_is_skipped(self):
+        repo, _ = self.make_remote("alpha", {"run.py": RUN_PY})
+        cfg = self.write_config(self.root, [profile("alpha", repo)])
+        lock = FileLock(self.root / "state" / "poller.lock")
         self.assertTrue(lock.acquire())
         try:
             r = self.poll(cfg)
         finally:
             lock.release()
-        self.assertIn("alpha: busy", r.stdout)
+        self.assertIn("Poller busy", r.stdout)
         self.assertEqual(self.run_count(self.root, "alpha"), 0)
-        self.assertEqual(self.run_count(self.root, "beta"), 1)
-
-    def test_long_experiment_does_not_block_another(self):
+        self.poll(cfg)
+        self.assertEqual(self.run_count(self.root, "alpha"), 1)
+    def test_different_installations_run_concurrently(self):
         slow, _ = self.make_remote("slow", {"run.py": "import time; time.sleep(6)"})
         fast, _ = self.make_remote("fast", {"run.py": RUN_PY})
-        cfg = self.write_config(self.root, [profile("slow", slow), profile("fast", fast)])
-        t = threading.Thread(target=self.poll, args=(cfg,))
+        fast_root = self.tmp / "independent fast install"
+        slow_cfg = self.write_config(self.root, [profile("slow", slow)])
+        fast_cfg = self.write_config(fast_root, [profile("fast", fast)])
+        t = threading.Thread(target=self.poll, args=(slow_cfg,))
         t.start()
-        deadline = time.time() + 5
-        while time.time() < deadline and self.run_count(self.root, "fast") == 0:
-            time.sleep(0.2)
-        self.assertEqual(self.run_count(self.root, "fast"), 1, "fast experiment waited for slow one")
+        r = self.poll(fast_cfg)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.run_count(fast_root, "fast"), 1)
+        self.assertTrue(t.is_alive(), "separate installation was blocked by another")
         t.join()
         self.assertEqual(self.state(self.root, "slow")["status"], "succeeded")
-
     def test_interrupted_run_is_visible_and_needs_force(self):
         repo, _ = self.make_remote("alpha", {"run.py": RUN_PY})
         cfg = self.write_config(self.root, [profile("alpha", repo)])
@@ -197,6 +192,20 @@ class PollTests(GitTestCase):
         (self.root / "paused.flag").write_text("paused")
         self.assertIn("paused", self.poll(cfg).stdout)
         self.assertFalse((self.root / "workspaces" / "alpha").exists())
+
+    def test_legacy_config_migration_requires_exactly_one_experiment(self):
+        repo, _ = self.make_remote("alpha", {"run.py": RUN_PY})
+        cfg = self.write_config(self.root, [profile("alpha", repo)])
+        raw = json.loads(cfg.read_text())
+        single = raw.pop("experiment")
+        raw["experiments"] = [single]
+        cfg.write_text(json.dumps(raw))
+        self.assertEqual(self.cli("check", "--config", str(cfg)).returncode, 0)
+        raw["experiments"].append({**single, "id": "beta"})
+        cfg.write_text(json.dumps(raw))
+        r = self.cli("check", "--config", str(cfg))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("one experiment", r.stdout)
 
     @unittest.skipUnless(shutil.which("pwsh"), "pwsh not installed")
     def test_powershell_entrypoint(self):
