@@ -5,7 +5,7 @@ This project is a **small Git repo poller**, implemented in Python 3.10+ (standa
 ## Scope
 
 - Implement a tiny installed bootstrapper: local lock, Git fetch + safe fast-forward of approved clean checkouts, fixed configured command invocation, timeout, local structured status/logs.
-- Each experiment repository owns its own entrypoint (`run.py` or `run.ps1`, optionally a verify script). Experiments run independently and in parallel from one poller installation.
+- **One experiment per instance**: each installation's config has a single `experiment` object. Multiple experiments run as multiple independent poller installations, never as threads in one process. Each experiment repository owns its own entrypoint (`run.py` or `run.ps1`, optionally a verify script).
 - Installer: `poller.ps1 setup` (interactive, current user, no admin by default), plus unattended, dry-run, repair, pause/resume, and uninstall modes.
 - Own updater: keep the poller outside experiment checkouts; update only between runs, with last-known-good fallback; no hot self-modification.
 - A future mailbox adapter may request only locally approved experiment IDs. Do not add an untrusted remote-command interface.
@@ -17,7 +17,7 @@ This project is a **small Git repo poller**, implemented in Python 3.10+ (standa
 - Do not enable scheduled tasks, expensive inference, auto-push or new background services without explicit opt-in.
 - Treat `exit 0` as execution success only; validity requires a separate verification result.
 - Prefer the Python standard library and Git over new dependencies, heavyweight frameworks or background daemons. Keep PowerShell limited to the wrapper.
-- Use local temporary Git remotes and dummy commands for tests. Cover initial clone, updates, unchanged revisions, dirty/diverged states, failures, timeouts, concurrency, offline resume, and two configurations.
+- Use local temporary Git remotes and dummy commands for tests. Cover initial clone, updates, unchanged revisions, dirty/diverged states, failures, timeouts, locks/busy ticks, offline resume, result publishing, interruption, two independent installations, legacy config migration and experiment replacement.
 - Do not claim any feature is implemented, tested or deployed until independently verified.
 
 ## Delivery

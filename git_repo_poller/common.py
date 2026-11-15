@@ -133,6 +133,23 @@ def _interval_seconds(raw: Dict[str, Any]) -> int:
     return 30
 
 
+def _single_experiment(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """One experiment per instance. Legacy 'experiments' lists migrate if they hold exactly one entry."""
+    if raw.get("experiment") is not None:
+        if raw.get("experiments"):
+            raise PollerError("Configuration has both 'experiment' and 'experiments'; use only 'experiment'")
+        return normalize_experiment(raw["experiment"])
+    legacy = raw.get("experiments") or []
+    if len(legacy) == 1:
+        return normalize_experiment(legacy[0])
+    if len(legacy) > 1:
+        raise PollerError(
+            f"This poller runs exactly ONE experiment per instance, but the configuration lists {len(legacy)}. "
+            "Split them into separate installations: one install folder and one config per experiment "
+            "(see README 'Multiple workers / experiments').")
+    raise PollerError("Configuration must define one 'experiment' object")
+
+
 def load_config(path: Path) -> Dict[str, Any]:
     if not path.is_file():
         raise PollerError(f"Configuration not found: {path}")
@@ -143,10 +160,6 @@ def validate_config(raw: Dict[str, Any]) -> Dict[str, Any]:
     worker = str(raw.get("workerId", ""))
     if not ID_PATTERN.match(worker):
         raise PollerError(f"Invalid workerId '{worker}'")
-    experiments = [normalize_experiment(j) for j in raw.get("experiments") or []]
-    ids = [e["id"] for e in experiments]
-    if len(ids) != len(set(ids)):
-        raise PollerError("Duplicate experiment ids in configuration")
     return {
         "workerId": worker,
         "intervalSeconds": _interval_seconds(raw),
@@ -154,7 +167,7 @@ def validate_config(raw: Dict[str, Any]) -> Dict[str, Any]:
         "autoUpdate": raw.get("autoUpdate") is True,
         "engineRemote": str(raw.get("engineRemote") or "").strip(),
         "engineBranch": str(raw.get("engineBranch") or "main").strip(),
-        "experiments": experiments,
+        "experiment": _single_experiment(raw),
     }
 
 

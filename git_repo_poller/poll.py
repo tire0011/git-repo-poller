@@ -1,7 +1,7 @@
-"""One poll tick: update approved checkouts and run changed experiments.
+"""One poll tick: update the configured checkout and run it on relevant changes.
 
-Each experiment is handled in its own thread with its own lock, so a long
-experiment never blocks the others and overlapping ticks skip busy ones.
+Exactly one experiment runs per poller instance. A non-blocking lock skips
+overlapping ticks and a crashed run is surfaced as 'interrupted'.
 """
 from __future__ import annotations
 
@@ -10,8 +10,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import threading
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -20,12 +18,10 @@ from . import sync_results
 from .common import FileLock, PollerError, git, is_under, load_config, load_json, matches_prefix, save_json
 
 FAILED_STATES = {"error", "failed", "timed_out", "verification_failed"}
-_print_lock = threading.Lock()
 
 
 def _say(text: str) -> None:
-    with _print_lock:
-        print(text, flush=True)
+    print(text, flush=True)
 
 
 def _now() -> str:
@@ -131,6 +127,22 @@ def _relevant_change(job: Dict[str, Any], checkout: Path, previous: str, sha: st
     return any(not matches_prefix(p, ignored) for p in changed)
 
 
+def _other_execution_active(states: Path, own_lock: Path) -> str:
+    """Id of another experiment whose lock is held by a live process, if any.
+
+    One experiment per instance means this only triggers when the configured
+    experiment was switched while a previous execution is still running.
+    """
+    for other in sorted(states.glob("*.lock")):
+        if other == own_lock or other.name == "launcher.lock":
+            continue
+        probe = FileLock(other)
+        if not probe.acquire():
+            return other.stem
+        probe.release()
+    return ""
+
+
 def poll_experiment(job: Dict[str, Any], root: Path, worker_id: str, force: bool) -> Dict[str, Any]:
     exp_id = job["id"]
     states = root / "state"
@@ -138,6 +150,11 @@ def poll_experiment(job: Dict[str, Any], root: Path, worker_id: str, force: bool
     lock = FileLock(states / f"{exp_id}.lock")
     if not lock.acquire():
         _say(f"{exp_id}: busy (still running from an earlier tick); skipped")
+        return {"experimentId": exp_id, "status": "busy"}
+    other = _other_execution_active(states, lock.path)
+    if other:
+        lock.release()
+        _say(f"{exp_id}: skipped, experiment '{other}' is still running")
         return {"experimentId": exp_id, "status": "busy"}
     try:
         state = load_json(state_file) if state_file.exists() else {}
@@ -223,30 +240,21 @@ def poll_experiment(job: Dict[str, Any], root: Path, worker_id: str, force: bool
         lock.release()
 
 
-def check(config_path: Path, only: str = "") -> int:
+def check(config_path: Path) -> int:
     config = load_config(config_path)
-    for job in config["experiments"]:
-        if only and job["id"] != only:
-            continue
-        print(f"CHECK {job['id']}: {job['repo']} [{job['branch']}] -> {job['entrypoint']} ({job['runMode']})")
+    job = config["experiment"]
+    print(f"CHECK {job['id']}: {job['repo']} [{job['branch']}] -> {job['entrypoint']} ({job['runMode']})")
     return 0
 
 
-def poll(config_path: Path, only: str = "", force: bool = False) -> int:
+def poll(config_path: Path, force: bool = False) -> int:
     config_path = config_path.resolve()
     config = load_config(config_path)
     root = config_path.parent
     if (root / "paused.flag").exists():
         print("Poller paused. No updates or commands were run.")
         return 0
-    jobs = [j for j in config["experiments"] if not only or j["id"] == only]
-    if only and not jobs:
-        raise PollerError(f"Unknown experiment id '{only}'")
     for sub in ("workspaces", "state", "runs"):
         (root / sub).mkdir(parents=True, exist_ok=True)
-    if not jobs:
-        print("No experiments configured.")
-        return 0
-    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-        results = list(pool.map(lambda j: poll_experiment(j, root, config["workerId"], force), jobs))
-    return 1 if any(r["status"] in FAILED_STATES for r in results) else 0
+    result = poll_experiment(config["experiment"], root, config["workerId"], force)
+    return 1 if result["status"] in FAILED_STATES else 0

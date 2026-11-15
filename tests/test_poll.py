@@ -1,6 +1,5 @@
 import json
 import shutil
-import threading
 import time
 import unittest
 from pathlib import Path
@@ -24,16 +23,13 @@ class PollTests(GitTestCase):
     def poll(self, cfg, *extra):
         return self.cli("poll", "--config", str(cfg), *extra)
 
-    def test_two_experiments_clone_unchanged_update_and_ignored_paths(self):
-        a_repo, a_seed = self.make_remote("alpha", {"run.py": RUN_PY})
-        b_repo, _ = self.make_remote("beta", {"run.py": RUN_PY})
-        cfg = self.write_config(self.root, [profile("alpha", a_repo, ignorePaths=["results/"]),
-                                            profile("beta", b_repo)])
+    def test_clone_run_unchanged_update_ignored_change_and_force(self):
+        repo, seed = self.make_remote("alpha", {"run.py": RUN_PY})
+        cfg = self.write_config(self.root, profile("alpha", repo, ignorePaths=["results/"]))
         r = self.poll(cfg)
         self.assertEqual(r.returncode, 0, r.stdout)
-        for exp in ("alpha", "beta"):
-            self.assertEqual(self.state(self.root, exp)["status"], "succeeded")
-            self.assertEqual(self.run_count(self.root, exp), 1)
+        self.assertEqual(self.state(self.root, "alpha")["status"], "succeeded")
+        self.assertEqual(self.run_count(self.root, "alpha"), 1)
         # Outputs went to the per-run dir, so the checkout stays clean.
         self.assertEqual(g(self.root / "workspaces" / "alpha", "status", "--porcelain"), "")
 
@@ -41,23 +37,41 @@ class PollTests(GitTestCase):
         self.assertEqual(self.state(self.root, "alpha")["status"], "unchanged")
         self.assertEqual(self.run_count(self.root, "alpha"), 1)
 
-        new_sha = self.commit(a_seed, {"code.txt": "changed"}, "change alpha")
+        new_sha = self.commit(seed, {"code.txt": "changed"}, "change alpha")
         self.poll(cfg)
         self.assertEqual(self.run_count(self.root, "alpha"), 2)
-        self.assertEqual(self.run_count(self.root, "beta"), 1)
         self.assertEqual(self.state(self.root, "alpha")["commitSha"], new_sha)
 
-        self.commit(a_seed, {"results/metrics.txt": "x"}, "results only")
+        self.commit(seed, {"results/metrics.txt": "x"}, "results only")
         self.poll(cfg)
         self.assertEqual(self.state(self.root, "alpha")["status"], "ignored_change")
         self.assertEqual(self.run_count(self.root, "alpha"), 2)
 
-        r = self.poll(cfg, "--only", "beta", "--force")
-        self.assertEqual(self.run_count(self.root, "beta"), 2, r.stdout)
+        r = self.poll(cfg, "--force")
+        self.assertEqual(self.run_count(self.root, "alpha"), 3, r.stdout)
+
+    def test_two_independent_installations_run_different_experiments(self):
+        a_repo, a_seed = self.make_remote("alpha", {"run.py": RUN_PY})
+        b_repo, _ = self.make_remote("beta", {"run.py": RUN_PY})
+        root_a, root_b = self.tmp / "install-a", self.tmp / "install-b"
+        cfg_a = self.write_config(root_a, profile("alpha", a_repo))
+        cfg_b = self.write_config(root_b, profile("beta", b_repo))
+        self.assertEqual(self.poll(cfg_a).returncode, 0)
+        self.assertEqual(self.poll(cfg_b).returncode, 0)
+        self.assertEqual(self.state(root_a, "alpha")["status"], "succeeded")
+        self.assertEqual(self.state(root_b, "beta")["status"], "succeeded")
+
+        self.commit(a_seed, {"code.txt": "v2"}, "alpha v2")
+        self.poll(cfg_a)
+        self.poll(cfg_b)
+        self.assertEqual(self.run_count(root_a, "alpha"), 2)
+        self.assertEqual(self.state(root_a, "alpha")["status"], "succeeded")
+        self.assertEqual(self.run_count(root_b, "beta"), 1)
+        self.assertEqual(self.state(root_b, "beta")["status"], "unchanged")
 
     def test_dirty_and_diverged_checkouts_are_refused_and_preserved(self):
         repo, seed = self.make_remote("alpha", {"run.py": RUN_PY})
-        cfg = self.write_config(self.root, [profile("alpha", repo)])
+        cfg = self.write_config(self.root, profile("alpha", repo))
         self.poll(cfg)
         checkout = self.root / "workspaces" / "alpha"
         (checkout / "untracked.txt").write_text("keep me")
@@ -80,7 +94,7 @@ class PollTests(GitTestCase):
 
     def test_failure_is_recorded_and_not_retried_every_tick(self):
         repo, _ = self.make_remote("alpha", {"run.py": "import sys; sys.exit(3)"})
-        cfg = self.write_config(self.root, [profile("alpha", repo)])
+        cfg = self.write_config(self.root, profile("alpha", repo))
         self.assertEqual(self.poll(cfg).returncode, 1)
         st = self.state(self.root, "alpha")
         self.assertEqual((st["status"], st["exitCode"]), ("failed", 3))
@@ -89,7 +103,7 @@ class PollTests(GitTestCase):
 
     def test_timeout_kills_the_run(self):
         repo, _ = self.make_remote("alpha", {"run.py": "import time; time.sleep(60)"})
-        cfg = self.write_config(self.root, [profile("alpha", repo, timeoutSeconds=2)])
+        cfg = self.write_config(self.root, profile("alpha", repo, timeoutSeconds=2))
         start = time.time()
         self.poll(cfg)
         self.assertLess(time.time() - start, 30)
@@ -98,18 +112,21 @@ class PollTests(GitTestCase):
 
     def test_every_tick_mode_and_legacy_run_on_change_false(self):
         repo, _ = self.make_remote("alpha", {"run.py": RUN_PY})
-        repo2, _ = self.make_remote("legacy", {"run.py": RUN_PY})
-        cfg = self.write_config(self.root, [profile("alpha", repo, runMode="every_tick"),
-                                            profile("legacy", repo2, runOnChange=False)])
+        cfg = self.write_config(self.root, profile("alpha", repo, runMode="every_tick"))
         self.poll(cfg)
         self.poll(cfg)
         self.assertEqual(self.run_count(self.root, "alpha"), 2)
-        self.assertEqual(self.run_count(self.root, "legacy"), 2)
         self.assertIn("every_tick", self.cli("check", "--config", str(cfg)).stdout)
+
+        legacy_root = self.tmp / "legacy"
+        legacy = self.write_legacy_config(legacy_root, [profile("legacy", repo, runOnChange=False)])
+        self.poll(legacy)
+        self.poll(legacy)
+        self.assertEqual(self.run_count(legacy_root, "legacy"), 2)
 
     def test_verification_result_is_separate_from_exit_code(self):
         repo, seed = self.make_remote("alpha", {"run.py": RUN_PY, "verify.py": "import sys; sys.exit(1)"})
-        cfg = self.write_config(self.root, [profile("alpha", repo, verifyEntry="verify.py")])
+        cfg = self.write_config(self.root, profile("alpha", repo, verifyEntry="verify.py"))
         self.poll(cfg)
         st = self.state(self.root, "alpha")
         self.assertEqual((st["status"], st["verificationStatus"]), ("verification_failed", "failed"))
@@ -120,16 +137,15 @@ class PollTests(GitTestCase):
 
     def test_entrypoint_must_stay_inside_checkout(self):
         repo, _ = self.make_remote("alpha", {"run.py": RUN_PY})
-        cfg = self.write_config(self.root, [profile("alpha", repo, entrypoint="../outside.py")])
+        cfg = self.write_config(self.root, profile("alpha", repo, entrypoint="../outside.py"))
         (self.root / "workspaces").mkdir(parents=True)
         (self.root / "workspaces" / "outside.py").write_text("print('escaped')")
         self.poll(cfg)
         self.assertIn("inside the approved checkout", self.state(self.root, "alpha")["error"])
 
-    def test_busy_experiment_is_skipped_but_others_run(self):
-        a_repo, _ = self.make_remote("alpha", {"run.py": RUN_PY})
-        b_repo, _ = self.make_remote("beta", {"run.py": RUN_PY})
-        cfg = self.write_config(self.root, [profile("alpha", a_repo), profile("beta", b_repo)])
+    def test_busy_tick_is_skipped(self):
+        repo, _ = self.make_remote("alpha", {"run.py": RUN_PY})
+        cfg = self.write_config(self.root, profile("alpha", repo))
         lock = FileLock(self.root / "state" / "alpha.lock")
         self.assertTrue(lock.acquire())
         try:
@@ -138,24 +154,28 @@ class PollTests(GitTestCase):
             lock.release()
         self.assertIn("alpha: busy", r.stdout)
         self.assertEqual(self.run_count(self.root, "alpha"), 0)
-        self.assertEqual(self.run_count(self.root, "beta"), 1)
 
-    def test_long_experiment_does_not_block_another(self):
-        slow, _ = self.make_remote("slow", {"run.py": "import time; time.sleep(6)"})
-        fast, _ = self.make_remote("fast", {"run.py": RUN_PY})
-        cfg = self.write_config(self.root, [profile("slow", slow), profile("fast", fast)])
-        t = threading.Thread(target=self.poll, args=(cfg,))
-        t.start()
-        deadline = time.time() + 5
-        while time.time() < deadline and self.run_count(self.root, "fast") == 0:
-            time.sleep(0.2)
-        self.assertEqual(self.run_count(self.root, "fast"), 1, "fast experiment waited for slow one")
-        t.join()
-        self.assertEqual(self.state(self.root, "slow")["status"], "succeeded")
+    def test_tick_is_skipped_while_another_execution_is_active(self):
+        # Switching the configured experiment must never start a second execution
+        # while the previous experiment is still running.
+        repo, _ = self.make_remote("alpha", {"run.py": RUN_PY})
+        cfg = self.write_config(self.root, profile("alpha", repo))
+        self.poll(cfg)
+        other_repo, _ = self.make_remote("beta", {"run.py": RUN_PY})
+        cfg2 = self.write_config(self.root, profile("beta", other_repo))
+        lock = FileLock(self.root / "state" / "alpha.lock")
+        self.assertTrue(lock.acquire())  # alpha is still running
+        try:
+            r = self.poll(cfg2)
+        finally:
+            lock.release()
+        self.assertIn("still running", r.stdout)
+        self.assertEqual(self.run_count(self.root, "beta"), 0)
+        self.assertFalse((self.root / "workspaces" / "beta").exists())
 
     def test_interrupted_run_is_visible_and_needs_force(self):
         repo, _ = self.make_remote("alpha", {"run.py": RUN_PY})
-        cfg = self.write_config(self.root, [profile("alpha", repo)])
+        cfg = self.write_config(self.root, profile("alpha", repo))
         self.poll(cfg)
         path = self.root / "state" / "alpha.json"
         st = json.loads(path.read_text())
@@ -170,7 +190,7 @@ class PollTests(GitTestCase):
 
     def test_offline_remote_then_resume(self):
         repo, seed = self.make_remote("alpha", {"run.py": RUN_PY})
-        cfg = self.write_config(self.root, [profile("alpha", repo)])
+        cfg = self.write_config(self.root, profile("alpha", repo))
         self.poll(cfg)
         self.commit(seed, {"code.txt": "v2"}, "v2")
         hidden = Path(repo + ".offline")
@@ -185,15 +205,15 @@ class PollTests(GitTestCase):
     def test_wrong_remote_is_refused(self):
         repo, _ = self.make_remote("alpha", {"run.py": RUN_PY})
         other, _ = self.make_remote("other", {"run.py": RUN_PY})
-        cfg = self.write_config(self.root, [profile("alpha", repo)])
+        cfg = self.write_config(self.root, profile("alpha", repo))
         self.poll(cfg)
-        cfg = self.write_config(self.root, [profile("alpha", other)])
+        cfg = self.write_config(self.root, profile("alpha", other))
         self.poll(cfg)
         self.assertIn("Wrong Git remote", self.state(self.root, "alpha")["error"])
 
     def test_paused_flag_stops_everything(self):
         repo, _ = self.make_remote("alpha", {"run.py": RUN_PY})
-        cfg = self.write_config(self.root, [profile("alpha", repo)])
+        cfg = self.write_config(self.root, profile("alpha", repo))
         (self.root / "paused.flag").write_text("paused")
         self.assertIn("paused", self.poll(cfg).stdout)
         self.assertFalse((self.root / "workspaces" / "alpha").exists())
@@ -202,10 +222,41 @@ class PollTests(GitTestCase):
     def test_powershell_entrypoint(self):
         ps = 'Set-Content -LiteralPath (Join-Path $env:GIT_POLLER_RUN_DIR "marker.txt") -Value $env:GIT_POLLER_COMMIT'
         repo, _ = self.make_remote("alpha", {"run.ps1": ps})
-        cfg = self.write_config(self.root, [profile("alpha", repo, entrypoint="run.ps1")])
+        cfg = self.write_config(self.root, profile("alpha", repo, entrypoint="run.ps1"))
         self.poll(cfg)
         self.assertEqual(self.state(self.root, "alpha")["status"], "succeeded")
         self.assertEqual(self.run_count(self.root, "alpha"), 1)
+
+
+class ConfigMigrationTests(GitTestCase):
+    """Old configs used an 'experiments' list; exactly one entry migrates automatically."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = self.tmp / "install"
+
+    def test_legacy_single_experiment_list_is_accepted(self):
+        repo, _ = self.make_remote("alpha", {"run.py": RUN_PY})
+        cfg = self.write_legacy_config(self.root, [profile("alpha", repo)])
+        r = self.cli("poll", "--config", str(cfg))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.state(self.root, "alpha")["status"], "succeeded")
+        self.assertIn("CHECK alpha", self.cli("check", "--config", str(cfg)).stdout)
+
+    def test_legacy_multi_experiment_list_is_refused_with_migration_hint(self):
+        a, _ = self.make_remote("alpha", {"run.py": RUN_PY})
+        b, _ = self.make_remote("beta", {"run.py": RUN_PY})
+        cfg = self.write_legacy_config(self.root, [profile("alpha", a), profile("beta", b)])
+        r = self.cli("poll", "--config", str(cfg))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("ONE experiment", r.stdout)
+        self.assertFalse((self.root / "workspaces").exists())
+
+    def test_missing_experiment_is_rejected(self):
+        cfg = self.write_legacy_config(self.root, [])
+        r = self.cli("check", "--config", str(cfg))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("one 'experiment'", r.stdout)
 
 
 # Benchmark-style experiment: writes results INTO the checkout (declared resultPaths).
@@ -224,8 +275,8 @@ class ResultSyncTests(GitTestCase):
         super().setUp()
         self.root = self.tmp / "install"
         self.repo, self.seed = self.make_remote("bench", {"run.py": BENCH_PY, "code.txt": "v1"})
-        self.cfg = self.write_config(self.root, [profile(
-            "bench", self.repo, ignorePaths=["results/runs/"], resultPaths=["results/runs/", "results/logs/"])])
+        self.cfg = self.write_config(self.root, profile(
+            "bench", self.repo, ignorePaths=["results/runs/"], resultPaths=["results/runs/", "results/logs/"]))
         self.checkout = self.root / "workspaces" / "bench"
 
     def poll(self):

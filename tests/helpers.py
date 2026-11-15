@@ -54,7 +54,15 @@ class GitTestCase(unittest.TestCase):
         g(seed, "push", "-q", "origin", "main")
         return g(seed, "rev-parse", "HEAD")
 
-    def write_config(self, root: Path, experiments: list, **extra) -> Path:
+    def write_config(self, root: Path, experiment: dict, **extra) -> Path:
+        root.mkdir(parents=True, exist_ok=True)
+        cfg = {"workerId": "test", "autoUpdate": False, "experiment": experiment, **extra}
+        path = root / "config.json"
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        return path
+
+    def write_legacy_config(self, root: Path, experiments: list, **extra) -> Path:
+        """Pre-refactor config shape: an 'experiments' list instead of one 'experiment'."""
         root.mkdir(parents=True, exist_ok=True)
         cfg = {"workerId": "test", "autoUpdate": False, "experiments": experiments, **extra}
         path = root / "config.json"

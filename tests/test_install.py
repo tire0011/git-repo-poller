@@ -7,7 +7,9 @@ import time
 import unittest
 from pathlib import Path
 
-from .helpers import REPO_ROOT, RUN_PY, GitTestCase
+from git_repo_poller.common import FileLock
+
+from .helpers import REPO_ROOT, RUN_PY, GitTestCase, g
 
 
 class InstallTests(GitTestCase):
@@ -19,8 +21,9 @@ class InstallTests(GitTestCase):
             files[f"git_repo_poller/{f.name}"] = f.read_text()
         self.engine_repo, self.engine_seed = self.make_remote("engine", files)
         self.exp_repo, self.exp_seed = self.make_remote("exp", {"run.py": RUN_PY})
-        self.source_cfg = self.write_config(self.tmp / "src", [{
-            "id": "exp", "repo": self.exp_repo, "branch": "main", "entrypoint": "run.py"}],
+        self.other_repo, _ = self.make_remote("other", {"run.py": RUN_PY})
+        self.source_cfg = self.write_config(self.tmp / "src", {
+            "id": "exp", "repo": self.exp_repo, "branch": "main", "entrypoint": "run.py"},
             autoUpdate=True, engineRemote=self.engine_repo, engineBranch="main")
 
     def setup_cli(self, *extra):
@@ -37,6 +40,11 @@ class InstallTests(GitTestCase):
     def current(self):
         return (self.root / "current-version.txt").read_text().strip()
 
+    def other_cfg(self, exp_id="other"):
+        return self.write_config(self.tmp / "src-other", {
+            "id": exp_id, "repo": self.other_repo, "branch": "main", "entrypoint": "run.py"},
+            autoUpdate=True, engineRemote=self.engine_repo, engineBranch="main")
+
     def test_dry_run_writes_nothing(self):
         r = self.setup_cli("--non-interactive", "--config", str(self.source_cfg), "--dry-run")
         self.assertEqual(r.returncode, 0, r.stdout)
@@ -47,13 +55,76 @@ class InstallTests(GitTestCase):
         self.assertEqual(self.setup_cli("--non-interactive").returncode, 1)
 
     def test_interactive_wizard(self):
-        answers = "\n".join(["wiz", "7", "n", "demo", self.exp_repo, "main", "run.py", "30", "n", "", "", "n"])
+        answers = "\n".join(["wiz", "7", "n", "demo", self.exp_repo, "main", "run.py", "30", "n", "", ""])
         r = self.cli("setup", "--install-root", str(self.root), stdin=answers + "\n")
         self.assertEqual(r.returncode, 0, r.stdout)
         cfg = json.loads((self.root / "config.json").read_text())
         self.assertEqual((cfg["workerId"], cfg["intervalSeconds"], cfg["autoUpdate"]), ("wiz", 7, False))
         self.assertIn(" watch ", r.stdout)
-        self.assertEqual(cfg["experiments"][0]["runMode"], "on_change")
+        self.assertEqual(cfg["experiment"]["id"], "demo")
+        self.assertEqual(cfg["experiment"]["runMode"], "on_change")
+
+    def test_interactive_replace_experiment_keeps_previous_workspace(self):
+        self.install()
+        self.launch()
+        self.assertEqual(self.state(self.root, "exp")["status"], "succeeded")
+        answers = "\n".join(["", "", "", "y", "other", self.other_repo, "main", "run.py", "30", "n", "", ""])
+        r = self.cli("setup", "--install-root", str(self.root), stdin=answers + "\n")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        cfg = json.loads((self.root / "config.json").read_text())
+        self.assertEqual(cfg["experiment"]["id"], "other")
+        # The previous experiment's workspace, runs and state are untouched.
+        self.assertTrue((self.root / "workspaces" / "exp").exists())
+        self.assertTrue(any((self.root / "runs" / "exp").iterdir()))
+        self.assertTrue((self.root / "state" / "exp.json").exists())
+        r = self.launch()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.state(self.root, "other")["status"], "succeeded")
+
+    def test_replace_via_config_keeps_previous_data(self):
+        self.install()
+        self.launch()
+        r = self.setup_cli("--non-interactive", "--config", str(self.other_cfg()))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        cfg = json.loads((self.root / "config.json").read_text())
+        self.assertEqual(cfg["experiment"]["id"], "other")
+        self.assertTrue((self.root / "workspaces" / "exp").exists())
+        self.assertTrue((self.root / "state" / "exp.json").exists())
+
+    def test_replace_is_refused_while_an_execution_is_active(self):
+        self.install()
+        self.launch()
+        lock = FileLock(self.root / "state" / "exp.lock")
+        self.assertTrue(lock.acquire())  # simulate a running execution
+        try:
+            r = self.setup_cli("--non-interactive", "--config", str(self.other_cfg()))
+        finally:
+            lock.release()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("still running", r.stdout)
+        cfg = json.loads((self.root / "config.json").read_text())
+        self.assertEqual(cfg["experiment"]["id"], "exp")
+
+    def test_replace_with_same_id_but_other_repo_is_refused(self):
+        self.install()
+        self.launch()  # creates workspaces/exp for self.exp_repo
+        r = self.setup_cli("--non-interactive", "--config", str(self.other_cfg(exp_id="exp")))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("different experiment id", r.stdout)
+        self.assertEqual(g(self.root / "workspaces" / "exp", "remote", "get-url", "origin"), self.exp_repo)
+
+    def test_setup_migrates_legacy_single_experiment_config(self):
+        self.install()
+        cfg = json.loads((self.root / "config.json").read_text())
+        legacy = dict(cfg)
+        legacy["experiments"] = [legacy.pop("experiment")]
+        (self.root / "config.json").write_text(json.dumps(legacy))
+        r = self.setup_cli("--repair")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        migrated = json.loads((self.root / "config.json").read_text())
+        self.assertIn("experiment", migrated)
+        self.assertNotIn("experiments", migrated)
+        self.assertEqual(migrated["experiment"]["id"], "exp")
 
     def test_install_launch_self_update_and_fallback(self):
         self.install()
@@ -170,8 +241,8 @@ class WrapperTests(GitTestCase):
         shutil.copytree(REPO_ROOT / "git_repo_poller", engine_seed / "git_repo_poller",
                         ignore=shutil.ignore_patterns("__pycache__"))
         self.commit(engine_seed, {}, "package")
-        cfg = self.write_config(self.tmp / "src", [{"id": "exp", "repo": repo, "branch": "main",
-                                                    "entrypoint": "run.py"}], engineRemote=engine)
+        cfg = self.write_config(self.tmp / "src", {"id": "exp", "repo": repo, "branch": "main",
+                                                   "entrypoint": "run.py"}, engineRemote=engine)
         root = self.tmp / "inst"
         r = self.pwsh(REPO_ROOT / "poller.ps1", "setup", "--install-root", str(root), "--non-interactive",
                       "--config", str(cfg))

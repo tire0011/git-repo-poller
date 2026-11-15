@@ -17,16 +17,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("check", help="validate a config file; changes nothing")
     p.add_argument("--config", required=True)
-    p.add_argument("--only", default="")
 
     p = sub.add_parser("poll", help="one tick with a given config (no self-update)")
     p.add_argument("--config", required=True)
-    p.add_argument("--only", default="")
     p.add_argument("--force", action="store_true", help="run even without a relevant change")
 
     p = sub.add_parser("launch", help="installed tick: optional self-update, then poll")
     p.add_argument("--install-root", default=str(default_install_root()))
-    p.add_argument("--only", default="")
     p.add_argument("--force", action="store_true")
     p.add_argument("--no-update", action="store_true")
 
@@ -34,11 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--install-root", default=str(default_install_root()))
     p.add_argument("--no-update", action="store_true")
 
-    p = sub.add_parser("setup", help="install / repair / pause / resume / uninstall")
+    p = sub.add_parser("setup", help="install / change experiment / repair / pause / resume / uninstall")
     p.add_argument("--install-root", default=str(default_install_root()))
     p.add_argument("--non-interactive", action="store_true")
-    p.add_argument("--config", default="", help="config JSON to install (required with --non-interactive)")
-    p.add_argument("--add-experiment", action="store_true")
+    p.add_argument("--config", default="", help="config JSON to install or replace the experiment with (required with --non-interactive)")
     p.add_argument("--repair", action="store_true", help="reinstall wrapper/bootstrap from the installed config")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--uninstall", action="store_true")
@@ -61,17 +57,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command == "check":
-            return poll.check(Path(args.config), args.only)
+            return poll.check(Path(args.config))
         if args.command == "poll":
-            return poll.poll(Path(args.config), args.only, args.force)
+            return poll.poll(Path(args.config), args.force)
         if args.command == "launch":
-            return launcher.launch(Path(args.install_root), args.only, args.force, args.no_update)
+            return launcher.launch(Path(args.install_root), args.force, args.no_update)
         if args.command == "watch":
             return launcher.watch(Path(args.install_root), args.no_update)
         if args.command == "setup":
             return installer.setup(
                 Path(args.install_root), non_interactive=args.non_interactive or args.repair,
-                config_source=args.config, add=args.add_experiment, dry_run=args.dry_run,
+                config_source=args.config, dry_run=args.dry_run,
                 uninstall=args.uninstall, pause=args.pause, resume=args.resume)
         if args.command == "sync-results":
             sync_results.sync(Path(args.repo).resolve(), args.branch, args.expected_remote,
