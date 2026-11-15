@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List
 
-from .common import ID_PATTERN, PollerError, git, load_config, normalize_experiment, validate_config
+from .common import FileLock, ID_PATTERN, PollerError, git, load_config, normalize_experiment, validate_config
 
 DEFAULT_ENGINE_REMOTE = "https://github.com/tire0011/git-repo-poller.git"
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -38,34 +38,34 @@ def _split(text: str) -> List[str]:
     return [p.strip() for p in text.split(",") if p.strip()]
 
 
-def add_experiments(config: Dict[str, Any], ui: Prompter) -> None:
+def choose_experiment(ui: Prompter) -> Dict[str, Any]:
+    """Ask for exactly one experiment; never delete previous workspaces."""
     if not ui.interactive:
-        raise PollerError("For unattended setup, supply experiments in the --config JSON")
+        raise PollerError("For unattended setup, supply one experiment in --config JSON")
     while True:
         exp_id = ui.ask("Experiment ID (letters, digits, - or _)", "demo")
-        if not ID_PATTERN.match(exp_id) or any(e["id"] == exp_id for e in config["experiments"]):
-            print("Invalid or duplicate experiment ID")
+        if not ID_PATTERN.match(exp_id):
+            print("Invalid experiment ID")
             continue
-        url = ui.ask("Trusted Git repository URL (anyone who can push to its branch can run code here)")
+        url = ui.ask("Trusted Git repository URL (push access permits code execution here)")
         if not url:
             print("Git URL cannot be empty")
             continue
         branch = ui.ask("Branch", "main")
         bench = url.rstrip("/").removesuffix(".git").endswith("ai-native-code-bench")
-        entry = ui.ask("Entrypoint inside the repo (.ps1 or .py)", "poller-run.ps1" if bench else "run.ps1")
+        entry = ui.ask("Entrypoint (.ps1 or .py)", "poller-run.ps1" if bench else "run.ps1")
         timeout = int(ui.ask("Timeout in seconds", "600"))
-        every_tick = ui.ask_bool("Run on EVERY poll tick, even without new commits?", False)
+        every_tick = ui.ask_bool("Run on EVERY tick even without changes?", False)
         defaults = "results/runs/,results/logs/" if bench else ""
-        results = ui.ask("Result directories to commit+push before polling (empty = never commit/push)", defaults)
-        ignore = ui.ask("Ignore commits that only change these prefixes", defaults)
-        config["experiments"].append(normalize_experiment({
-            "id": exp_id, "repo": url, "branch": branch, "entrypoint": entry, "timeoutSeconds": timeout,
-            "runMode": "every_tick" if every_tick else "on_change",
+        results = ui.ask("Result directories to commit+push (empty = disabled)", defaults)
+        ignore = ui.ask("Ignore commits changing only these paths", defaults)
+        job = normalize_experiment({
+            "id": exp_id, "repo": url, "branch": branch, "entrypoint": entry,
+            "timeoutSeconds": timeout, "runMode": "every_tick" if every_tick else "on_change",
             "ignorePaths": _split(ignore), "resultPaths": _split(results),
-        }))
-        print(f"Added {exp_id} -> {url}")
-        if not ui.ask_bool("Add another experiment?", False):
-            return
+        })
+        print(f"Selected experiment {exp_id} -> {url}")
+        return job
 
 
 def _install_bootstrap(root: Path) -> None:
@@ -96,7 +96,7 @@ def _to_json(config: Dict[str, Any]) -> str:
     return json.dumps(config, indent=2)
 
 
-def setup(root: Path, *, non_interactive: bool = False, config_source: str = "", add: bool = False,
+def _setup_unlocked(root: Path, *, non_interactive: bool = False, config_source: str = "", replace: bool = False,
           dry_run: bool = False, uninstall: bool = False, pause: bool = False, resume: bool = False) -> int:
     root = root.resolve()
     installed = root / "config.json"
@@ -132,21 +132,28 @@ def setup(root: Path, *, non_interactive: bool = False, config_source: str = "",
             "intervalSeconds": int(ui.ask("Check for changes every N seconds", "30")),
             "autoUpdate": ui.ask_bool("Automatically update the poller itself from its Git repository? "
                                       "(every commit there then runs on this machine)", False),
-            "engineRemote": DEFAULT_ENGINE_REMOTE, "engineBranch": "main", "experiments": [],
+            "engineRemote": DEFAULT_ENGINE_REMOTE, "engineBranch": "main",
+            "experiment": choose_experiment(ui),
         }
-        add_experiments(config, ui)
-    if add:
-        add_experiments(config, ui)
+    if replace:
+        if non_interactive:
+            raise PollerError("Use --config JSON for non-interactive experiment replacement")
+        if not installed.exists() or config_source:
+            raise PollerError("Install first, then use setup --replace-experiment")
+        old = config["experiment"]
+        new = choose_experiment(ui)
+        if old["id"] == new["id"] and (old["repo"], old["branch"]) != (new["repo"], new["branch"]):
+            raise PollerError("Choose a new experiment ID when changing repository/branch; old files are preserved")
+        config["experiment"] = new
     if not config["engineRemote"]:
         config["engineRemote"] = DEFAULT_ENGINE_REMOTE
     # Re-validate whatever we are about to write.
     tmp_check = validate_config(config)
 
     print(f"Install folder: {root}")
-    print(f"Worker: {tmp_check['workerId']}; experiments: {len(tmp_check['experiments'])}; "
-          f"autoUpdate: {tmp_check['autoUpdate']}")
-    for job in tmp_check["experiments"]:
-        print(f"  {job['id']}: {job['repo']} [{job['branch']}] -> {job['entrypoint']} ({job['runMode']})")
+    print(f"Worker: {tmp_check['workerId']}; autoUpdate: {tmp_check['autoUpdate']}")
+    job = tmp_check["experiment"]
+    print(f"Experiment: {job['id']}: {job['repo']} [{job['branch']}] -> {job['entrypoint']} ({job['runMode']})")
     if dry_run:
         print("DRY RUN: configuration checked; nothing cloned, run or written.")
         return 0
@@ -165,3 +172,20 @@ def setup(root: Path, *, non_interactive: bool = False, config_source: str = "",
     print(f'Uninstall: pwsh -File "{wrapper}" setup --install-root "{root}" --uninstall')
     return 0
 
+
+
+def setup(root: Path, *, non_interactive: bool = False, config_source: str = "", replace: bool = False,
+          dry_run: bool = False, uninstall: bool = False, pause: bool = False, resume: bool = False) -> int:
+    """Use the poller's lock so a new experiment cannot replace an active run."""
+    args = dict(non_interactive=non_interactive, config_source=config_source, replace=replace,
+                dry_run=dry_run, uninstall=uninstall, pause=pause, resume=resume)
+    if dry_run or pause or resume:
+        # Dry-run must not create even a lock file; pause just prevents future ticks.
+        return _setup_unlocked(root, **args)
+    lock = FileLock(root.resolve() / "state" / "poller.lock")
+    if not lock.acquire():
+        raise PollerError("An experiment is currently running; change it after completion")
+    try:
+        return _setup_unlocked(root, **args)
+    finally:
+        lock.release()

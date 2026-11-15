@@ -7,6 +7,8 @@ import time
 import unittest
 from pathlib import Path
 
+from git_repo_poller.common import FileLock
+
 from .helpers import REPO_ROOT, RUN_PY, GitTestCase
 
 
@@ -53,7 +55,7 @@ class InstallTests(GitTestCase):
         cfg = json.loads((self.root / "config.json").read_text())
         self.assertEqual((cfg["workerId"], cfg["intervalSeconds"], cfg["autoUpdate"]), ("wiz", 7, False))
         self.assertIn(" watch ", r.stdout)
-        self.assertEqual(cfg["experiments"][0]["runMode"], "on_change")
+        self.assertEqual(cfg["experiment"]["runMode"], "on_change")
 
     def test_install_launch_self_update_and_fallback(self):
         self.install()
@@ -123,6 +125,37 @@ class InstallTests(GitTestCase):
                 return
             time.sleep(0.3)
         self.fail("condition not reached in time")
+
+    def test_replace_experiment_preserves_previous_workspace_and_results(self):
+        self.install()
+        self.launch()
+        old_workspace = self.root / "workspaces" / "exp"
+        self.assertTrue(old_workspace.exists())
+        old_runs = self.run_count(self.root, "exp")
+        new_repo, _ = self.make_remote("replacement", {"run.py": RUN_PY})
+        answers = "\\n".join(["newexp", new_repo, "main", "run.py", "30", "n", "", ""])
+        r = self.cli("setup", "--install-root", str(self.root),
+                     "--replace-experiment", stdin=answers.replace("\\n", "\n") + "\n")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        cfg = json.loads((self.root / "config.json").read_text())
+        self.assertEqual(cfg["experiment"]["id"], "newexp")
+        self.assertTrue(old_workspace.exists())
+        self.assertEqual(self.run_count(self.root, "exp"), old_runs)
+        self.assertEqual(self.launch().returncode, 0)
+        self.assertEqual(self.run_count(self.root, "newexp"), 1)
+
+    def test_replace_experiment_is_refused_while_worker_is_busy(self):
+        self.install()
+        config_before = (self.root / "config.json").read_text()
+        lock = FileLock(self.root / "state" / "poller.lock")
+        self.assertTrue(lock.acquire())
+        try:
+            r = self.setup_cli("--replace-experiment")
+        finally:
+            lock.release()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("currently running", r.stdout)
+        self.assertEqual((self.root / "config.json").read_text(), config_before)
 
     def test_legacy_interval_minutes(self):
         cfg = json.loads(self.source_cfg.read_text())

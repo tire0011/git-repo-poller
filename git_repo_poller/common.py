@@ -143,10 +143,21 @@ def validate_config(raw: Dict[str, Any]) -> Dict[str, Any]:
     worker = str(raw.get("workerId", ""))
     if not ID_PATTERN.match(worker):
         raise PollerError(f"Invalid workerId '{worker}'")
-    experiments = [normalize_experiment(j) for j in raw.get("experiments") or []]
-    ids = [e["id"] for e in experiments]
-    if len(ids) != len(set(ids)):
-        raise PollerError("Duplicate experiment ids in configuration")
+    # Accept a single legacy item for migration; never silently discard jobs.
+    experiment = raw.get("experiment")
+    legacy = raw.get("experiments")
+    if legacy is not None:
+        if experiment is not None:
+            raise PollerError("Specify 'experiment' OR legacy 'experiments', not both")
+        if not isinstance(legacy, list) or len(legacy) != 1:
+            raise PollerError(
+                "This poller runs one experiment. Legacy 'experiments' must contain exactly one "
+                "item; install other experiments in separate --install-root folders."
+            )
+        experiment = legacy[0]
+    if not isinstance(experiment, dict):
+        raise PollerError("Configuration requires one 'experiment' object")
+    experiment = normalize_experiment(experiment)
     return {
         "workerId": worker,
         "intervalSeconds": _interval_seconds(raw),
@@ -154,7 +165,7 @@ def validate_config(raw: Dict[str, Any]) -> Dict[str, Any]:
         "autoUpdate": raw.get("autoUpdate") is True,
         "engineRemote": str(raw.get("engineRemote") or "").strip(),
         "engineBranch": str(raw.get("engineBranch") or "main").strip(),
-        "experiments": experiments,
+        "experiment": experiment,
     }
 
 

@@ -11,7 +11,6 @@ import signal
 import subprocess
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -223,30 +222,31 @@ def poll_experiment(job: Dict[str, Any], root: Path, worker_id: str, force: bool
         lock.release()
 
 
-def check(config_path: Path, only: str = "") -> int:
+def check(config_path: Path) -> int:
     config = load_config(config_path)
-    for job in config["experiments"]:
-        if only and job["id"] != only:
-            continue
-        print(f"CHECK {job['id']}: {job['repo']} [{job['branch']}] -> {job['entrypoint']} ({job['runMode']})")
+    job = config["experiment"]
+    print(f"CHECK {job['id']}: {job['repo']} [{job['branch']}] -> {job['entrypoint']} ({job['runMode']})")
     return 0
 
 
-def poll(config_path: Path, only: str = "", force: bool = False) -> int:
+def poll(config_path: Path, force: bool = False) -> int:
     config_path = config_path.resolve()
-    config = load_config(config_path)
     root = config_path.parent
     if (root / "paused.flag").exists():
         print("Poller paused. No updates or commands were run.")
         return 0
-    jobs = [j for j in config["experiments"] if not only or j["id"] == only]
-    if only and not jobs:
-        raise PollerError(f"Unknown experiment id '{only}'")
-    for sub in ("workspaces", "state", "runs"):
-        (root / sub).mkdir(parents=True, exist_ok=True)
-    if not jobs:
-        print("No experiments configured.")
+
+    # One lock for the entire installation. The setup wizard takes the same
+    # lock before changing experiments, preventing switches during a run.
+    lock = FileLock(root / "state" / "poller.lock")
+    if not lock.acquire():
+        print("Poller busy: an experiment or configuration change is in progress.")
         return 0
-    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-        results = list(pool.map(lambda j: poll_experiment(j, root, config["workerId"], force), jobs))
-    return 1 if any(r["status"] in FAILED_STATES for r in results) else 0
+    try:
+        config = load_config(config_path)
+        for sub in ("workspaces", "state", "runs"):
+            (root / sub).mkdir(parents=True, exist_ok=True)
+        result = poll_experiment(config["experiment"], root, config["workerId"], force)
+        return 1 if result["status"] in FAILED_STATES else 0
+    finally:
+        lock.release()
