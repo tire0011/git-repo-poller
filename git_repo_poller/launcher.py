@@ -88,7 +88,7 @@ def select_engine(root: Path, config: dict, no_update: bool) -> Path:
     return snap
 
 
-def launch(root: Path, only: str = "", force: bool = False, no_update: bool = False) -> int:
+def launch(root: Path, force: bool = False, no_update: bool = False) -> int:
     root = root.resolve()
     config_path = root / "config.json"
     if not config_path.exists():
@@ -108,8 +108,6 @@ def launch(root: Path, only: str = "", force: bool = False, no_update: bool = Fa
         lock.release()
     print(f"Engine: {snap.name[:12]}")
     args = ["poll", "--config", str(config_path)]
-    if only:
-        args += ["--only", only]
     if force:
         args.append("--force")
     return _python_in(snap, args).returncode
