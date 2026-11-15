@@ -1,31 +1,12 @@
 # Git Repo Poller
 
-A **small Git poller** that keeps approved experiment checkouts current and runs each experiment's own entrypoint when its repository changes. The implementation is **Python 3.10+ (standard library only)**; `poller.ps1` is the single PowerShell wrapper. It runs as a normal app in a terminal and checks for changes every 30 seconds (no Task Scheduler, no service).
+**One poller installation, one Git experiment.** This small Python 3.10+ standard-library tool checks a trusted Git repository and runs its configured `run.py` or `run.ps1` when relevant commits appear. `poller.ps1` is the Windows PowerShell wrapper. No Mailbox, Nexus, MCP, GPU, model or plugin framework is required.
 
-The idea: experiments are prepared as Git repositories (by you or by agents), and a worker machine picks them up and runs them locally. The poller needs no GPU, AI model or mailbox. Each experiment owns its commands, dependencies and models.
-
-**Status:** implemented and covered by offline tests on Linux (Python and the PowerShell wrapper). CI runs the same tests on Windows. Not yet tried on a real Windows worker machine.
-
-```text
-poller.ps1 watch                  (runs until Ctrl+C; one tick every intervalSeconds)
-  └── launch                      (stable bootstrap copy in the install folder)
-        ├── optional engine self-update between ticks, last-known-good fallback
-        └── poll tick (one thread + one lock per experiment)
-              ├── experiment A: fetch, ff-only, run.py / run.ps1 → runs/A/<time>-<sha>/
-              └── experiment B: fetch, ff-only, run.py / run.ps1 → runs/B/<time>-<sha>/
-```
-
-## Trust model (read first)
-
-**Anyone who can push to a configured branch can run code on this machine**, as your user and with your Git credentials. This holds for every experiment repository, and for the poller repository itself if `autoUpdate` is on.
-
-- Protect the configured branches (branch protection on `main`). Agents deliver experiments via pull requests; a human merges.
-- `autoUpdate` is **off by default**. Turn it on only for a poller remote you control.
-- The engine check before switching versions is a startup/config check, **not** a security gate: it already executes the new code.
+Each installation has its own configuration, lock, checkout, execution history and logs. To run two experiments, create **two separate installations** with different `--install-root` values. One installation never runs multiple experiments.
 
 ## Setup (Windows)
 
-Prerequisites: Git for Windows, PowerShell 7, Python 3.10+ (`winget install Git.Git`, `winget install Microsoft.PowerShell`, `winget install Python.Python.3.12`), and credentials for private experiment repositories.
+Prerequisites: Git for Windows, Python 3.10+, PowerShell 7 (for the wrapper and `.ps1` experiments). The poller uses the user's existing Git credentials for private repositories.
 
 ```powershell
 git clone https://github.com/tire0011/git-repo-poller.git
@@ -33,22 +14,30 @@ cd git-repo-poller
 pwsh -File .\poller.ps1 setup
 ```
 
-The wizard asks for a worker ID, polling interval, self-update (default no) and experiments, and prints the start command. Nothing runs during setup. Everything is installed under `%LOCALAPPDATA%\GitRepoPoller`.
+The interactive wizard selects one repository, branch, experiment ID, entrypoint, interval, timeout and optional result directories. `autoUpdate` is off by default. No experiment is run by setup. Default install root is `$env:LOCALAPPDATA\GitRepoPoller`.
 
 ```powershell
 $p = "$env:LOCALAPPDATA\GitRepoPoller\poller.ps1"
-pwsh -File $p check --config "$env:LOCALAPPDATA\GitRepoPoller\config.json"  # validate only
-pwsh -File $p watch                                    # keep running, check every 30 s (Ctrl+C stops)
-pwsh -File $p launch                                   # one tick
-pwsh -File $p launch --only local-benchmark --force    # explicit rerun of one experiment
-pwsh -File .\poller.ps1 setup --add-experiment
-pwsh -File .\poller.ps1 setup --pause                  # / --resume
-pwsh -File .\poller.ps1 setup --repair                 # reinstall wrapper + bootstrap from installed config
-pwsh -File .\poller.ps1 setup --uninstall              # keeps workspaces, runs, state, engine
-pwsh -File .\poller.ps1 setup --non-interactive --config .\examples\config.example.json --dry-run
+pwsh -File $p check --config "$env:LOCALAPPDATA\GitRepoPoller\config.json"
+pwsh -File $p launch                       # one Git check, one experiment at most
+pwsh -File $p launch --force               # rerun the same experiment explicitly
+pwsh -File $p watch                        # repeat while terminal is open; Ctrl+C stops
+
+# Switch to another experiment in the SAME installation (old files retained):
+pwsh -File .\poller.ps1 setup --replace-experiment
+
+# Set up a SECOND, independent poller installation:
+pwsh -File .\poller.ps1 setup --install-root "$env:LOCALAPPDATA\GitRepoPoller-2"
+
+pwsh -File $p setup --pause
+pwsh -File $p setup --resume
+pwsh -File $p setup --repair
+pwsh -File $p setup --uninstall             # does not delete workspaces/runs
 ```
 
-Without PowerShell (any OS): `python -m git_repo_poller <command> ...` from the repository folder.
+The change command refuses to replace the configuration during an active run. Use a **new experiment ID** when changing repository or branch; existing workspaces, result files and run logs remain on disk.
+
+`watch` runs in the terminal until stopped; it does **not** install a Windows service or Task Scheduler job, and does not automatically restart after reboot. If needed, arrange startup separately after verifying the host.
 
 ## Configuration
 
@@ -59,59 +48,56 @@ Without PowerShell (any OS): `python -m git_repo_poller <command> ...` from the 
   "autoUpdate": false,
   "engineRemote": "https://github.com/tire0011/git-repo-poller.git",
   "engineBranch": "main",
-  "experiments": [
-    {
-      "id": "demo",
-      "repo": "https://github.com/you/your-experiment.git",
-      "branch": "main",
-      "entrypoint": "run.py",
-      "verifyEntry": "verify.py",
-      "timeoutSeconds": 600,
-      "runMode": "on_change",
-      "ignorePaths": ["docs/"],
-      "resultPaths": []
-    }
-  ]
+  "experiment": {
+    "id": "local-benchmark",
+    "repo": "https://github.com/tire0011/ai-native-code-bench.git",
+    "branch": "main",
+    "entrypoint": "poller-run.ps1",
+    "timeoutSeconds": 3600,
+    "runMode": "on_change",
+    "ignorePaths": ["results/runs/", "results/logs/"],
+    "resultPaths": ["results/runs/", "results/logs/"]
+  }
 }
 ```
 
-- `intervalSeconds`: pause between ticks in `watch` (default 30, minimum 5; older `intervalMinutes` is converted).
-- `entrypoint` / `verifyEntry`: a `.py` (run with the poller's Python) or `.ps1` (run with `pwsh`) file **inside** the checkout.
-- `runMode`: `on_change` (default) runs on the first check and after commits that touch paths outside `ignorePaths`/`resultPaths`. `every_tick` runs on every tick. The old `runOnChange: false` is read as `every_tick`.
-- `resultPaths` (opt-in): result folders that are committed and pushed **before** each update. Only result-only commits are ever rebased or pushed. Empty means the poller never commits or pushes.
+For automation or a second installation, supply this object with:
 
-## What an experiment gets
+```powershell
+pwsh -File .\poller.ps1 setup --install-root "$env:LOCALAPPDATA\GitRepoPoller-2" --non-interactive --config .\examples\config.example.json --dry-run
+```
 
-| Variable | Meaning |
-| --- | --- |
-| `GIT_POLLER_RUN_DIR` | Fresh folder for this run (outside the checkout). Logs `run.out.log`, `run.err.log` go here. **Write outputs here.** |
-| `GIT_POLLER_EXPERIMENT_ID`, `GIT_POLLER_COMMIT`, `GIT_POLLER_WORKER_ID` | Context of this run |
+`--dry-run` validates without writing or executing. Remove it only after adapting the remote and paths.
 
-Files written into the checkout make it dirty; the poller then refuses to update it (unless they are under `resultPaths`).
+**Legacy migration:** The old `"experiments": [ { ... } ]` format is accepted only when it contains **exactly one** experiment. Multi-experiment configurations fail with an explanation; create separate installations rather than silently losing jobs.
 
-Status per experiment is in `state/<id>.json`: `succeeded`, `failed`, `timed_out`, `verification_failed`, `unchanged`, `ignored_change`, `busy`, `interrupted` (machine crashed mid-run; rerun with `--force`), `error`. Exit code 0 means "executed", not "valid": use `verifyEntry` for that. A failed commit is not retried every tick; it needs a new commit or `--force`.
+## How each tick works
 
-## Safety rules
+1. Ensure the configured checkout exists, verify its remote/branch and protect local changes.
+2. Optionally reconcile only `resultPaths` using the tested result-only commit/push/rebase logic adapted from [AI-Native Code Bench](https://github.com/tire0011/ai-native-code-bench/blob/main/sync-results.ps1).
+3. Fetch Git updates and fast-forward safely. If a code commit changed outside ignored/result paths, invoke the configured entrypoint once.
+4. Save status and per-run stdout/stderr under `runs/<experiment-id>/`; the entrypoint also gets `GIT_POLLER_RUN_DIR` to write results outside its checkout.
 
-- Never `git reset --hard`, force-push or overwrite dirty/diverged checkouts; they are reported as `error` and left untouched.
-- The configured `origin` and branch must match exactly.
-- Experiments run in parallel, each with its own lock and timeout (the whole process tree is killed on timeout). Overlapping ticks skip busy experiments.
-- Self-update and result publishing are opt-in. Nothing runs in the background: the poller runs only while `watch` is open.
+`runMode`: `on_change` (default) or `every_tick`. No forced replay after a crashed run: the interrupted commit is reported, and a rerun requires `--force`. One installation-wide file lock prevents overlapping runs and setup changes. `verifyEntry` can separately verify a successful execution; exit code 0 alone is not proof of result validity.
 
-## AI Native Code Bench
+`resultPaths` defaults to empty, meaning **no automatic Git commits, rebases or pushes**. The poller never uses `git reset --hard` or force-push, and refuses dirty non-result worktrees.
 
-Use `entrypoint: poller-run.ps1` with `resultPaths`/`ignorePaths` `results/runs/`, `results/logs/` (see `examples/config.example.json` and [ai-native-code-bench#3](https://github.com/tire0011/ai-native-code-bench/issues/3)). The result sync is a port of the benchmark's `sync-results.ps1`. Never run the old watcher and the poller at the same time.
+The stable launcher may optionally update the poller engine *between* ticks, retaining a last-known-good snapshot. `autoUpdate` is off by default; turning it on trusts new code from the configured engine branch.
+
+## AI-Native Code Bench
+
+The existing benchmark's `run.ps1` starts its own watcher unless called with `-NoWatch`. The companion [benchmark adapter PR #4](https://github.com/tire0011/ai-native-code-bench/pull/4) supplies a one-shot `poller-run.ps1` which invokes the original `run.ps1 -NoWatch` and preserves its existing result publishing. Merge and test that adapter before selecting the benchmark as a live experiment. Never run the old watcher and this poller simultaneously.
 
 ## Tests
 
-```bash
+```powershell
 python -m unittest discover -v -s tests -t .
 ```
 
-Offline only: temporary local bare Git remotes and dummy entrypoints. Covers two experiments, updates, unchanged/ignored commits, dirty and diverged checkouts, failures, timeouts, verification, parallel runs and locks, interrupted runs, offline resume, result sync, installer modes, the `watch` loop, self-update with fallback and the PowerShell wrapper (if `pwsh` is installed).
+All tests use synthetic local Git repositories and dummy entrypoints: setup and migration, single-experiment change detection, two **separate installations**, locking, updates, failures, timeout, crash recovery and result sync. GitHub Actions also runs Windows and Linux tests.
 
-## Boundaries
+## Trust boundary
 
-The [Mailbox](https://github.com/tire0011/agent-lab-mailbox) delivers tasks and replies; this poller only runs locally configured experiments. A future mailbox adapter may request only locally approved experiment IDs. No remote free-form command execution.
+Anyone who can push to the selected experiment branch can cause scripts to run as the local user. Limit write access to trusted people/agents. The poller has **no mailbox integration or remote-command interface**.
 
-[MIT License](LICENSE) © 2026 Rene Tittel.
+MIT License © 2026 Rene Tittel.
