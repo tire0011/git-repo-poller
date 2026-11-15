@@ -56,7 +56,9 @@ class GitTestCase(unittest.TestCase):
 
     def write_config(self, root: Path, experiments: list, **extra) -> Path:
         root.mkdir(parents=True, exist_ok=True)
-        cfg = {"workerId": "test", "autoUpdate": False, "experiments": experiments, **extra}
+        if len(experiments) != 1:
+            raise ValueError("Each test installation must configure exactly one experiment")
+        cfg = {"workerId": "test", "autoUpdate": False, "experiment": experiments[0], **extra}
         path = root / "config.json"
         path.write_text(json.dumps(cfg), encoding="utf-8")
         return path
