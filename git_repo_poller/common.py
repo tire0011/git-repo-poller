@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
-RUN_MODES = ("on_change", "every_tick")
+RUN_MODES = ("on_change", "every_tick", "service")
 
 
 class PollerError(Exception):
@@ -112,13 +112,18 @@ def normalize_experiment(job: Dict[str, Any]) -> Dict[str, Any]:
     if run_mode not in RUN_MODES:
         raise PollerError(f"Experiment '{exp_id}': runMode must be one of {RUN_MODES}")
     timeout = int(job.get("timeoutSeconds") or 600)
+    verify = str(job.get("verifyEntry") or "").strip() or None
+    if run_mode == "service" and verify:
+        raise PollerError(f"Experiment '{exp_id}': verifyEntry is not supported with runMode 'service'")
     return {
         "id": exp_id,
         "repo": str(job["repo"]).strip(),
         "branch": str(job["branch"]).strip(),
         "entrypoint": str(job["entrypoint"]).strip(),
-        "verifyEntry": str(job.get("verifyEntry") or "").strip() or None,
+        "verifyEntry": verify,
         "timeoutSeconds": max(1, timeout),
+        # service mode: grace period for a graceful stop before the tree is killed.
+        "stopTimeoutSeconds": max(1, int(job.get("stopTimeoutSeconds") or 30)),
         "runMode": run_mode,
         "ignorePaths": _str_list(job.get("ignorePaths")),
         "resultPaths": _str_list(job.get("resultPaths")),

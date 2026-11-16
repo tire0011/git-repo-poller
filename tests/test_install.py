@@ -49,7 +49,7 @@ class InstallTests(GitTestCase):
         self.assertEqual(self.setup_cli("--non-interactive").returncode, 1)
 
     def test_interactive_wizard(self):
-        answers = "\n".join(["wiz", "7", "n", "demo", self.exp_repo, "main", "run.py", "30", "n", "", "", "n"])
+        answers = "\n".join(["wiz", "7", "n", "demo", self.exp_repo, "main", "run.py", "30", "", "", "", "n"])
         r = self.cli("setup", "--install-root", str(self.root), stdin=answers + "\n")
         self.assertEqual(r.returncode, 0, r.stdout)
         cfg = json.loads((self.root / "config.json").read_text())
@@ -133,7 +133,7 @@ class InstallTests(GitTestCase):
         self.assertTrue(old_workspace.exists())
         old_runs = self.run_count(self.root, "exp")
         new_repo, _ = self.make_remote("replacement", {"run.py": RUN_PY})
-        answers = "\\n".join(["newexp", new_repo, "main", "run.py", "30", "n", "", ""])
+        answers = "\\n".join(["newexp", new_repo, "main", "run.py", "30", "", "", ""])
         r = self.cli("setup", "--install-root", str(self.root),
                      "--replace-experiment", stdin=answers.replace("\\n", "\n") + "\n")
         self.assertEqual(r.returncode, 0, r.stdout)

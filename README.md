@@ -78,11 +78,38 @@ pwsh -File .\poller.ps1 setup --install-root "$env:LOCALAPPDATA\GitRepoPoller-2"
 3. Fetch Git updates and fast-forward safely. If a code commit changed outside ignored/result paths, invoke the configured entrypoint once.
 4. Save status and per-run stdout/stderr under `runs/<experiment-id>/`; the entrypoint also gets `GIT_POLLER_RUN_DIR` to write results outside its checkout.
 
-`runMode`: `on_change` (default) or `every_tick`. No forced replay after a crashed run: the interrupted commit is reported, and a rerun requires `--force`. One installation-wide file lock prevents overlapping runs and setup changes. `verifyEntry` can separately verify a successful execution; exit code 0 alone is not proof of result validity.
+`runMode`: `on_change` (default), `every_tick` or `service` (see below). No forced replay after a crashed run: the interrupted commit is reported, and a rerun requires `--force`. One installation-wide file lock prevents overlapping runs and setup changes. `verifyEntry` can separately verify a successful execution; exit code 0 alone is not proof of result validity.
 
 `resultPaths` defaults to empty, meaning **no automatic Git commits, rebases or pushes**. The poller never uses `git reset --hard` or force-push, and refuses dirty non-result worktrees.
 
 The stable launcher may optionally update the poller engine *between* ticks, retaining a last-known-good snapshot. `autoUpdate` is off by default; turning it on trusts new code from the configured engine branch.
+
+## Long-running agents (`runMode: "service"`)
+
+For an entrypoint that runs until stopped (for example an agent bridge), set `"runMode": "service"`. `launch`/`watch` then supervise it instead of waiting for it to exit:
+
+1. Fetch and fast-forward the checkout, then start the entrypoint in the background (logs in `runs/<experiment-id>/<stamp>-<sha>/`).
+2. Every `intervalSeconds`, fetch. When a commit changes files outside `ignorePaths`/`resultPaths`, stop the process, fast-forward, then start it again on the new commit. Commits that change only ignored paths are fast-forwarded without a restart.
+3. If the process exits on its own, the exit is recorded (`exited`/`failed`) and it is **not** restarted until the next relevant commit, so a crashing agent cannot loop.
+4. If the checkout is offline, dirty or diverged, the running process is left alone and the problem goes into the state file's `error` field.
+5. `setup --pause` (from another terminal) or Ctrl+C stops the process and the supervisor.
+
+Stopping sends Ctrl+Break (Windows) or SIGTERM (Linux), waits `stopTimeoutSeconds` (default 30), then kills the remaining process tree. On Windows the process tree is in a job object, so killing the poller also stops the agent and leaves no unsupervised duplicate. `timeoutSeconds` and `verifyEntry` do not apply in service mode. Because the supervisor holds the installation lock while the agent runs, the engine self-update and `setup --replace-experiment` wait until it is stopped. `state/<experiment-id>.json` shows `status` (`running`, `restarting`, `exited`, `failed`, `stopped`), `pid`, `commitSha` and `restarts`.
+
+### Multi-Agent Collaboration Hub
+
+[`examples/config.hub.example.json`](examples/config.hub.example.json) runs one hub agent's bridge via the hub's own `start.ps1`, which starts the single agent configured under `%LOCALAPPDATA%\agent-hub\agents\`. Agent configuration and credentials stay in that per-user directory, outside the checkout.
+
+```powershell
+pwsh -File .\poller.ps1 setup --install-root "$env:LOCALAPPDATA\GitRepoPoller-hub" --non-interactive --config .\examples\config.hub.example.json
+# start.ps1 needs a .venv inside the poller's checkout. Create it once after the first clone:
+pwsh -File "$env:LOCALAPPDATA\GitRepoPoller-hub\poller.ps1" launch --install-root "$env:LOCALAPPDATA\GitRepoPoller-hub"   # clones; stop with Ctrl+C
+cd "$env:LOCALAPPDATA\GitRepoPoller-hub\workspaces\agent-hub"
+py -3.11 -m venv .venv; .\.venv\Scripts\python -m pip install -e .
+pwsh -File "$env:LOCALAPPDATA\GitRepoPoller-hub\poller.ps1" watch --install-root "$env:LOCALAPPDATA\GitRepoPoller-hub"
+```
+
+The hub supports **one bridge process per SQLite database**, so do not also run `start.ps1` for the same agent from another checkout. The editable install picks up code changes on restart. Dependency changes in `pyproject.toml` still need `pip install -e .` again.
 
 ## AI-Native Code Bench
 

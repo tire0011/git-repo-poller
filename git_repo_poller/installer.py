@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List
 
-from .common import FileLock, ID_PATTERN, PollerError, git, load_config, normalize_experiment, validate_config
+from .common import FileLock, ID_PATTERN, RUN_MODES, PollerError, git, load_config, normalize_experiment, validate_config
 
 DEFAULT_ENGINE_REMOTE = "https://github.com/tire0011/git-repo-poller.git"
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -54,14 +54,18 @@ def choose_experiment(ui: Prompter) -> Dict[str, Any]:
         branch = ui.ask("Branch", "main")
         bench = url.rstrip("/").removesuffix(".git").endswith("ai-native-code-bench")
         entry = ui.ask("Entrypoint (.ps1 or .py)", "poller-run.ps1" if bench else "run.ps1")
-        timeout = int(ui.ask("Timeout in seconds", "600"))
-        every_tick = ui.ask_bool("Run on EVERY tick even without changes?", False)
+        timeout = int(ui.ask("Timeout in seconds (not used by service mode)", "600"))
+        run_mode = ui.ask("Run mode: on_change, every_tick, or service "
+                          "(long-running agent, restarted on new commits)", "on_change")
+        if run_mode not in RUN_MODES:
+            print(f"Run mode must be one of {', '.join(RUN_MODES)}")
+            continue
         defaults = "results/runs/,results/logs/" if bench else ""
         results = ui.ask("Result directories to commit+push (empty = disabled)", defaults)
         ignore = ui.ask("Ignore commits changing only these paths", defaults)
         job = normalize_experiment({
             "id": exp_id, "repo": url, "branch": branch, "entrypoint": entry,
-            "timeoutSeconds": timeout, "runMode": "every_tick" if every_tick else "on_change",
+            "timeoutSeconds": timeout, "runMode": run_mode,
             "ignorePaths": _split(ignore), "resultPaths": _split(results),
         })
         print(f"Selected experiment {exp_id} -> {url}")

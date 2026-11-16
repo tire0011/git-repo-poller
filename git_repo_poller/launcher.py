@@ -20,9 +20,16 @@ from typing import List
 from .common import FileLock, PollerError, git, load_config
 
 
-def _python_in(snapshot: Path, args: List[str]) -> subprocess.CompletedProcess:
+def _python_in(snapshot: Path, args: List[str]) -> int:
     env = dict(os.environ, PYTHONPATH=str(snapshot))
-    return subprocess.run([sys.executable, "-m", "git_repo_poller", *args], cwd=str(snapshot), env=env)
+    proc = subprocess.Popen([sys.executable, "-m", "git_repo_poller", *args], cwd=str(snapshot), env=env)
+    try:
+        return proc.wait()
+    except KeyboardInterrupt:
+        # Ctrl+C reached the tick as well. Unlike subprocess.run, do not kill it:
+        # a service-mode tick must stop its supervised process cleanly first.
+        proc.wait()
+        raise
 
 
 def _update_engine(engine: Path, remote: str, branch: str) -> None:
@@ -72,7 +79,7 @@ def select_engine(root: Path, config: dict, no_update: bool) -> Path:
             snap = _snapshot(engine, versions, candidate)
             # Startup + config check only. NOT a security gate: this already
             # executes the new code, so only trust engine remotes you control.
-            ok = _python_in(snap, ["check", "--config", str(root / "config.json")]).returncode == 0
+            ok = _python_in(snap, ["check", "--config", str(root / "config.json")]) == 0
         except PollerError as exc:
             print(f"WARNING: {exc}", file=sys.stderr)
             ok = False
@@ -110,7 +117,7 @@ def launch(root: Path, force: bool = False, no_update: bool = False) -> int:
     args = ["poll", "--config", str(config_path)]
     if force:
         args.append("--force")
-    return _python_in(snap, args).returncode
+    return _python_in(snap, args)
 
 
 

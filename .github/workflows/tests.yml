@@ -21,4 +21,6 @@ jobs:
         run: python -m unittest discover -v -s tests -t .
       - name: PowerShell wrapper smoke check
         shell: pwsh
-        run: ./poller.ps1 check --config ./examples/config.example.json
+        run: |
+          ./poller.ps1 check --config ./examples/config.example.json
+          ./poller.ps1 check --config ./examples/config.hub.example.json

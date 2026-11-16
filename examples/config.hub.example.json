@@ -1,0 +1,18 @@
+{
+  "workerId": "hub-agent",
+  "intervalSeconds": 60,
+  "autoUpdate": false,
+  "engineRemote": "https://github.com/tire0011/git-repo-poller.git",
+  "engineBranch": "main",
+  "experiment": {
+    "id": "agent-hub",
+    "repo": "https://gitlab.example.com/your-group/multi-agent-collaboration-hub.git",
+    "branch": "main",
+    "entrypoint": "start.ps1",
+    "runMode": "service",
+    "stopTimeoutSeconds": 30,
+    "ignorePaths": [
+      "docs/"
+    ]
+  }
+}
