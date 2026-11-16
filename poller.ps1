@@ -1,7 +1,7 @@
 # The only PowerShell file: forwards all arguments to the Python implementation.
-#   pwsh -File .\poller.ps1 setup
-#   pwsh -File .\poller.ps1 launch [--only ID] [--force]
-#   pwsh -File .\poller.ps1 check --config .\examples\config.example.json
+#   pwsh -File .\poller.ps1            first run: a few questions; then watch, pull and (re)start (Ctrl+C stops)
+#   pwsh -File .\poller.ps1 setup      change settings
+#   pwsh -File .\poller.ps1 status     what is running, last result
 # Set GIT_POLLER_PYTHON to pick a specific interpreter.
 $ErrorActionPreference = 'Stop'
 if ($env:GIT_POLLER_PYTHON) {

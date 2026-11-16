@@ -49,13 +49,36 @@ class InstallTests(GitTestCase):
         self.assertEqual(self.setup_cli("--non-interactive").returncode, 1)
 
     def test_interactive_wizard(self):
-        answers = "\n".join(["wiz", "7", "n", "demo", self.exp_repo, "main", "run.py", "30", "", "", "", "n"])
+        # URL, branch, long-running?, program, interval (bad value is asked again).
+        answers = "\n".join([self.exp_repo, "main", "n", "run.py", "2", "7"])
         r = self.cli("setup", "--install-root", str(self.root), stdin=answers + "\n")
         self.assertEqual(r.returncode, 0, r.stdout)
         cfg = json.loads((self.root / "config.json").read_text())
-        self.assertEqual((cfg["workerId"], cfg["intervalSeconds"], cfg["autoUpdate"]), ("wiz", 7, False))
-        self.assertIn(" watch ", r.stdout)
-        self.assertEqual(cfg["experiment"]["runMode"], "on_change")
+        self.assertEqual((cfg["intervalSeconds"], cfg["autoUpdate"]), (7, False))
+        self.assertEqual((cfg["experiment"]["id"], cfg["experiment"]["runMode"]), ("exp", "on_change"))
+        self.assertIn("Change settings", r.stdout)
+
+    def test_no_arguments_sets_up_then_starts_and_status_reports(self):
+        # No command = start; with LOCALAPPDATA redirected, the default install root is temporary.
+        env = dict(os.environ, PYTHONPATH=str(REPO_ROOT), LOCALAPPDATA=str(self.tmp / "appdata"),
+                   GIT_POLLER_ENGINE_REMOTE=self.engine_repo)
+        root = self.tmp / "appdata" / "GitRepoPoller"
+
+        def run(*args, stdin=""):
+            return subprocess.run([sys.executable, "-m", "git_repo_poller", *args], cwd=str(REPO_ROOT), env=env,
+                                  input=stdin, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+        r = run("status")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Not set up", r.stdout)
+        # Long-running program answer "y", then decline "Start now?".
+        r = run(stdin="\n".join([self.exp_repo, "", "y", "run.py", "", "n"]) + "\n")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        cfg = json.loads((root / "config.json").read_text())
+        self.assertEqual((cfg["experiment"]["runMode"], cfg["intervalSeconds"]), ("service", 30))
+        self.assertIn("Has not run yet", run("status").stdout)
+        self.assertIn("help", run("--help").stdout)
+        self.assertNotIn("sync-results", run("--help").stdout)
 
     def test_install_launch_self_update_and_fallback(self):
         self.install()
@@ -133,16 +156,24 @@ class InstallTests(GitTestCase):
         self.assertTrue(old_workspace.exists())
         old_runs = self.run_count(self.root, "exp")
         new_repo, _ = self.make_remote("replacement", {"run.py": RUN_PY})
-        answers = "\\n".join(["newexp", new_repo, "main", "run.py", "30", "", "", ""])
-        r = self.cli("setup", "--install-root", str(self.root),
-                     "--replace-experiment", stdin=answers.replace("\\n", "\n") + "\n")
+        # Plain "setup" on an existing installation asks the questions again.
+        answers = "\n".join([new_repo, "main", "n", "run.py", ""])
+        r = self.cli("setup", "--install-root", str(self.root), stdin=answers + "\n")
         self.assertEqual(r.returncode, 0, r.stdout)
         cfg = json.loads((self.root / "config.json").read_text())
-        self.assertEqual(cfg["experiment"]["id"], "newexp")
+        self.assertEqual(cfg["experiment"]["id"], "replacement")
         self.assertTrue(old_workspace.exists())
         self.assertEqual(self.run_count(self.root, "exp"), old_runs)
         self.assertEqual(self.launch().returncode, 0)
-        self.assertEqual(self.run_count(self.root, "newexp"), 1)
+        self.assertEqual(self.run_count(self.root, "replacement"), 1)
+
+        # A different repo with the same name gets a new ID, so old files are never reused.
+        twin_repo, _ = self.make_remote("twin/replacement", {"run.py": RUN_PY})
+        answers = "\n".join([twin_repo, "main", "n", "run.py", ""])
+        r = self.cli("setup", "--install-root", str(self.root), "--replace-experiment", stdin=answers + "\n")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        cfg = json.loads((self.root / "config.json").read_text())
+        self.assertEqual(cfg["experiment"]["id"], "replacement-2")
 
     def test_replace_experiment_is_refused_while_worker_is_busy(self):
         self.install()
