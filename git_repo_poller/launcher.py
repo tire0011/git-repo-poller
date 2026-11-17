@@ -87,6 +87,12 @@ def select_engine(root: Path, config: dict, no_update: bool) -> Path:
             selected_file.write_text(candidate, encoding="ascii")
             return versions / candidate
         if not old:
+            # launch() already loaded the config with this bootstrap. Keep a
+            # newer local install usable when the cloned engine is older (or
+            # otherwise incompatible) and no snapshot has been selected yet.
+            if (root / "git_repo_poller").is_dir():
+                print("WARNING: no compatible engine snapshot; using the installed bootstrap", file=sys.stderr)
+                return root
             raise PollerError("No valid engine version available")
         print(f"WARNING: engine candidate {candidate[:8]} failed its check; keeping {old[:8]}", file=sys.stderr)
     snap = versions / old

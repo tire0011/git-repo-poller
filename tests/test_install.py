@@ -7,7 +7,8 @@ import time
 import unittest
 from pathlib import Path
 
-from git_repo_poller.common import FileLock
+from git_repo_poller import launcher
+from git_repo_poller.common import FileLock, load_config
 
 from .helpers import REPO_ROOT, RUN_PY, GitTestCase
 
@@ -79,6 +80,23 @@ class InstallTests(GitTestCase):
         self.assertIn("Has not run yet", run("status").stdout)
         self.assertIn("help", run("--help").stdout)
         self.assertNotIn("sync-results", run("--help").stdout)
+
+    def test_installed_bootstrap_is_initial_fallback_for_incompatible_engine(self):
+        # A setup wizard from a newer branch can write a config that the
+        # released engine does not understand yet (here: service mode).
+        common = self.engine_seed / "git_repo_poller" / "common.py"
+        self.commit(self.engine_seed, {"git_repo_poller/common.py": common.read_text().replace(
+            'RUN_MODES = ("on_change", "every_tick", "service")',
+            'RUN_MODES = ("on_change", "every_tick")')}, "older engine without service mode")
+        cfg = json.loads(self.source_cfg.read_text())
+        cfg["experiment"]["runMode"] = "service"
+        self.source_cfg.write_text(json.dumps(cfg))
+        self.install()
+
+        config = load_config(self.root / "config.json")
+        selected = launcher.select_engine(self.root.resolve(), config, no_update=True)
+        self.assertEqual(selected, self.root.resolve())
+        self.assertEqual(launcher._python_in(selected, ["check", "--config", str(self.root / "config.json")]), 0)
 
     def test_install_launch_self_update_and_fallback(self):
         self.install()
