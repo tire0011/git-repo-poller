@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,7 +12,8 @@ from typing import Any, Dict, List
 
 from .common import FileLock, ID_PATTERN, PollerError, git, load_config, normalize_experiment, validate_config
 
-DEFAULT_ENGINE_REMOTE = "https://github.com/tire0011/git-repo-poller.git"
+# Where the poller updates itself from; override for forks (and offline tests).
+DEFAULT_ENGINE_REMOTE = os.environ.get("GIT_POLLER_ENGINE_REMOTE") or "https://github.com/tire0011/git-repo-poller.git"
 PACKAGE_DIR = Path(__file__).resolve().parent
 SOURCE_ROOT = PACKAGE_DIR.parent
 
@@ -38,34 +40,64 @@ def _split(text: str) -> List[str]:
     return [p.strip() for p in text.split(",") if p.strip()]
 
 
+def _repo_name(url: str) -> str:
+    return url.rstrip("/").removesuffix(".git").replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _is_bench(url: str) -> bool:
+    return _repo_name(url) == "ai-native-code-bench"
+
+
+def _safe_id(text: str, fallback: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", text).strip("-")
+    return cleaned if ID_PATTERN.match(cleaned) else fallback
+
+
 def choose_experiment(ui: Prompter) -> Dict[str, Any]:
-    """Ask for exactly one experiment; never delete previous workspaces."""
+    """Ask the few questions that matter; everything else gets a default.
+
+    Finer settings (ignorePaths, timeoutSeconds, every_tick...) can be edited
+    in config.json afterwards. The experiment ID is derived from the repo name.
+    """
     if not ui.interactive:
         raise PollerError("For unattended setup, supply one experiment in --config JSON")
     while True:
-        exp_id = ui.ask("Experiment ID (letters, digits, - or _)", "demo")
-        if not ID_PATTERN.match(exp_id):
-            print("Invalid experiment ID")
-            continue
-        url = ui.ask("Trusted Git repository URL (push access permits code execution here)")
+        url = ui.ask("Git repository URL (anyone who can push there can run code on this machine)")
         if not url:
             print("Git URL cannot be empty")
             continue
-        branch = ui.ask("Branch", "main")
-        bench = url.rstrip("/").removesuffix(".git").endswith("ai-native-code-bench")
-        entry = ui.ask("Entrypoint (.ps1 or .py)", "poller-run.ps1" if bench else "run.ps1")
-        timeout = int(ui.ask("Timeout in seconds", "600"))
-        every_tick = ui.ask_bool("Run on EVERY tick even without changes?", False)
-        defaults = "results/runs/,results/logs/" if bench else ""
-        results = ui.ask("Result directories to commit+push (empty = disabled)", defaults)
-        ignore = ui.ask("Ignore commits changing only these paths", defaults)
-        job = normalize_experiment({
-            "id": exp_id, "repo": url, "branch": branch, "entrypoint": entry,
-            "timeoutSeconds": timeout, "runMode": "every_tick" if every_tick else "on_change",
-            "ignorePaths": _split(ignore), "resultPaths": _split(results),
-        })
-        print(f"Selected experiment {exp_id} -> {url}")
-        return job
+        break
+    branch = ui.ask("Branch", "main")
+    name = _repo_name(url)
+    bench = _is_bench(url)
+    service = ui.ask_bool("Is it a long-running program (e.g. an agent) that should be restarted "
+                          "on every change?", not bench)
+    default_entry = "poller-run.ps1" if bench else "start.ps1" if service else "run.ps1"
+    while True:
+        entry = ui.ask("Program to start, inside the repository (.ps1 or .py)", default_entry)
+        if entry.lower().endswith((".ps1", ".py")):
+            break
+        print("The program must be a .ps1 or .py file")
+    results = ""
+    if bench:
+        results = ui.ask("Result folders to commit+push (empty = never push)", "results/runs/,results/logs/")
+    exp_id = _safe_id(name, "experiment")
+    job = normalize_experiment({
+        "id": exp_id, "repo": url, "branch": branch, "entrypoint": entry,
+        "timeoutSeconds": 3600, "runMode": "service" if service else "on_change",
+        "ignorePaths": _split(results), "resultPaths": _split(results),
+    })
+    print(f"Selected {exp_id}: {url} [{branch}] -> {entry} "
+          f"({'restart on every change' if service else 'run once per change'})")
+    return job
+
+
+def _ask_interval(ui: Prompter, default: int) -> int:
+    while True:
+        answer = ui.ask("Check for changes every N seconds", str(default))
+        if answer.isdigit() and int(answer) >= 5:
+            return int(answer)
+        print("Enter a number of seconds (at least 5)")
 
 
 def _install_bootstrap(root: Path) -> None:
@@ -123,28 +155,45 @@ def _setup_unlocked(root: Path, *, non_interactive: bool = False, config_source:
         config = load_config(Path(config_source).resolve())
     elif installed.exists():
         config = load_config(installed)
+        # Interactive setup on an existing installation = change the settings.
+        replace = replace or not non_interactive
     else:
         if non_interactive:
             raise PollerError("Provide --config with --non-interactive")
-        worker = ui.ask("Worker ID (e.g. home-gpu)", platform.node().lower() or "worker")
         config = {
-            "workerId": worker,
-            "intervalSeconds": int(ui.ask("Check for changes every N seconds", "30")),
-            "autoUpdate": ui.ask_bool("Automatically update the poller itself from its Git repository? "
-                                      "(every commit there then runs on this machine)", False),
+            "workerId": _safe_id(platform.node().lower(), "worker"),
+            "autoUpdate": False,
             "engineRemote": DEFAULT_ENGINE_REMOTE, "engineBranch": "main",
             "experiment": choose_experiment(ui),
         }
+        config["intervalSeconds"] = _ask_interval(ui, 30)
     if replace:
         if non_interactive:
             raise PollerError("Use --config JSON for non-interactive experiment replacement")
         if not installed.exists() or config_source:
             raise PollerError("Install first, then use setup --replace-experiment")
         old = config["experiment"]
+        print(f"Current: {old['id']}: {old['repo']} [{old['branch']}] -> {old['entrypoint']} ({old['runMode']})")
         new = choose_experiment(ui)
         if old["id"] == new["id"] and (old["repo"], old["branch"]) != (new["repo"], new["branch"]):
-            raise PollerError("Choose a new experiment ID when changing repository/branch; old files are preserved")
+            # Same name, different source: never reuse the old workspace/runs.
+            n = 2
+            while (root / "workspaces" / f"{new['id']}-{n}").exists() or (root / "runs" / f"{new['id']}-{n}").exists():
+                n += 1
+            new["id"] = f"{new['id']}-{n}"
+            print(f"Using experiment ID {new['id']}; files of {old['id']} are kept")
+        if old["id"] == new["id"]:
+            # Same source: keep settings that are only editable in config.json.
+            new["timeoutSeconds"] = old["timeoutSeconds"]
+            new["stopTimeoutSeconds"] = old["stopTimeoutSeconds"]
+            if not _is_bench(new["repo"]):  # the wizard only asks result folders for the benchmark
+                new["ignorePaths"], new["resultPaths"] = old["ignorePaths"], old["resultPaths"]
+            if new["runMode"] == "on_change" and old["runMode"] == "every_tick":
+                new["runMode"] = "every_tick"
+            if new["runMode"] != "service":
+                new["verifyEntry"] = old["verifyEntry"]
         config["experiment"] = new
+        config["intervalSeconds"] = _ask_interval(ui, config["intervalSeconds"])
     if not config["engineRemote"]:
         config["engineRemote"] = DEFAULT_ENGINE_REMOTE
     # Re-validate whatever we are about to write.
@@ -163,13 +212,10 @@ def _setup_unlocked(root: Path, *, non_interactive: bool = False, config_source:
     _install_bootstrap(root)
     installed.write_text(_to_json(tmp_check), encoding="utf-8")
     wrapper = root / "poller.ps1"
-    print(f"Installed. Config: {installed}")
-    print(f'Check:     pwsh -File "{wrapper}" check --config "{installed}"')
-    print(f'Start:     pwsh -File "{wrapper}" watch --install-root "{root}"   (checks every '
-          f'{tmp_check["intervalSeconds"]} s, Ctrl+C stops)')
-    print(f'Run once:  pwsh -File "{wrapper}" launch --install-root "{root}"')
-    print(f'Pause:     pwsh -File "{wrapper}" setup --install-root "{root}" --pause')
-    print(f'Uninstall: pwsh -File "{wrapper}" setup --install-root "{root}" --uninstall')
+    print(f"Installed. Settings: {installed}")
+    print(f'Start:           pwsh -File "{wrapper}"   (Ctrl+C stops)')
+    print(f'Change settings: pwsh -File "{wrapper}" setup')
+    print(f'Status:          pwsh -File "{wrapper}" status')
     return 0
 
 
