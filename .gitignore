@@ -41,3 +41,6 @@ versions/
 engine/
 current-version.txt
 paused.flag
+
+# Package build output
+dist/

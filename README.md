@@ -2,7 +2,35 @@
 
 Watches **one** Git repository. When new commits arrive, it pulls them and starts the repository's program again. That program can be a long-running agent that gets restarted, or a script that runs once per change. Python 3.10+ standard library only; `poller.ps1` is the Windows wrapper.
 
-## Quick start (Windows)
+## Install as a Python package (ZIP)
+
+No Git clone of the poller repository is needed. Prerequisites: Python 3.10+ and Git (only for the repository you want to watch).
+
+Download `git-repo-poller-<version>.zip` from [GitHub Releases](https://github.com/tire0011/git-repo-poller/releases) (or build it from a clone with `python tools/make_zip.py`) and either install it:
+
+```powershell
+pip install git-repo-poller-<version>.zip
+git-repo-poller --version
+```
+
+or unzip it and run it in place:
+
+```powershell
+Expand-Archive git-repo-poller-<version>.zip -DestinationPath git-repo-poller
+cd git-repo-poller
+python -m git_repo_poller --version   # or .\poller.ps1
+```
+
+The `git-repo-poller` command (and `python -m git_repo_poller`) accepts exactly the same commands as `poller.ps1`: `start` (default), `setup`, `status`, plus the plumbing commands `check`, `poll`, `launch`, `watch` and `sync-results`. Unattended setup uses the existing configuration format:
+
+```powershell
+git-repo-poller setup --install-root "$env:LOCALAPPDATA\GitRepoPoller" --non-interactive --config .\examples\config.example.json
+git-repo-poller start --install-root "$env:LOCALAPPDATA\GitRepoPoller"
+```
+
+With `"autoUpdate": false` (the default) a package-based installation does **not** clone the poller engine and needs no checkout of the poller repository itself: the installed package is used directly. Set `"autoUpdate": true` to keep a Git clone of `engineRemote` and self-update between ticks, exactly like the Git-based installation below. All commands, configuration options and the service mode (`runMode: "service"`) work unchanged in package mode.
+
+## Quick start (Windows, from a Git clone)
 
 Prerequisites: Git for Windows, Python 3.10+, PowerShell 7. Private repositories use your existing Git credentials.
 
@@ -125,7 +153,7 @@ The existing benchmark's `run.ps1` starts its own watcher unless called with `-N
 python -m unittest discover -v -s tests -t .
 ```
 
-All tests use synthetic local Git repositories and dummy entrypoints: setup and migration, single-experiment change detection, two **separate installations**, locking, updates, failures, timeout, crash recovery and result sync. GitHub Actions also runs Windows and Linux tests.
+All tests use synthetic local Git repositories and dummy entrypoints: setup and migration, single-experiment change detection, two **separate installations**, locking, updates, failures, timeout, crash recovery, result sync, and **package-based installations** (`tests/test_package.py`: build the ZIP, run from the unzipped ZIP and from a clean `pip`-installed environment without the poller source repository or an engine clone). GitHub Actions also runs Windows and Linux tests plus a package job that installs the ZIP into a clean venv.
 
 ## Trust boundary
 

@@ -68,6 +68,10 @@ def select_engine(root: Path, config: dict, no_update: bool) -> Path:
     versions = root / "versions"
     selected_file = root / "current-version.txt"
     if not (engine / ".git").exists():
+        if not config["autoUpdate"] and (root / "git_repo_poller").is_dir():
+            # Package-based installation with self-update disabled: the
+            # installed bootstrap copy is the engine; no poller clone needed.
+            return root
         raise PollerError("Engine checkout missing; run 'setup --repair'")
     versions.mkdir(parents=True, exist_ok=True)
     old = selected_file.read_text(encoding="ascii").strip() if selected_file.exists() else ""
@@ -119,7 +123,7 @@ def launch(root: Path, force: bool = False, no_update: bool = False) -> int:
     finally:
         # Ticks lock per experiment; the launcher lock only guards engine selection.
         lock.release()
-    print(f"Engine: {snap.name[:12]}")
+    print(f"Engine: {snap.name[:12] if snap != root else 'installed bootstrap'}")
     args = ["poll", "--config", str(config_path)]
     if force:
         args.append("--force")

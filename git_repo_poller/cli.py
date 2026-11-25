@@ -14,7 +14,7 @@ from .common import PollerError, default_install_root, load_config, load_json
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="poller.ps1", description=__doc__,
+    parser = argparse.ArgumentParser(prog="git-repo-poller", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--version", action="version", version=__version__)
     # Only start/setup/status are listed; the other commands are plumbing used
@@ -82,7 +82,7 @@ def status(root: Path) -> int:
     root = root.resolve()
     config_path = root / "config.json"
     if not config_path.exists():
-        print(f"Not set up yet ({root}). Run poller.ps1 without arguments to start.")
+        print(f"Not set up yet ({root}). Run git-repo-poller (or poller.ps1) without arguments to start.")
         return 1
     job = load_config(config_path)["experiment"]
     mode = "restart on every change" if job["runMode"] == "service" else job["runMode"]
