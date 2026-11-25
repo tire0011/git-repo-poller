@@ -100,14 +100,28 @@ def _ask_interval(ui: Prompter, default: int) -> int:
         print("Enter a number of seconds (at least 5)")
 
 
-def _install_bootstrap(root: Path) -> None:
+def _from_source_checkout() -> bool:
+    """True when running from a Git clone of the poller repository.
+
+    False for package-based installations (pip-installed or an unzipped
+    release ZIP): those have no poller source checkout to update from.
+    """
+    return (SOURCE_ROOT / ".git").exists()
+
+
+def _install_bootstrap(root: Path) -> bool:
+    """Copy the package into the install root; returns True if a wrapper was written."""
     target = root / "git_repo_poller"
     tmp = root / ".git_repo_poller.tmp"
     shutil.rmtree(tmp, ignore_errors=True)
     shutil.copytree(PACKAGE_DIR, tmp, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.rmtree(target, ignore_errors=True)
     os.replace(tmp, target)
-    shutil.copy2(SOURCE_ROOT / "poller.ps1", root / "poller.ps1")
+    for wrapper_src in (SOURCE_ROOT / "poller.ps1", PACKAGE_DIR / "poller.ps1"):
+        if wrapper_src.exists():
+            shutil.copy2(wrapper_src, root / "poller.ps1")
+            return True
+    return False
 
 
 def _ensure_engine(root: Path, config: Dict[str, Any]) -> None:
@@ -118,6 +132,11 @@ def _ensure_engine(root: Path, config: Dict[str, Any]) -> None:
         return
     if engine.exists():
         raise PollerError("Engine directory exists but is not a Git clone")
+    if not config["autoUpdate"] and not _from_source_checkout():
+        # Package-based installation with self-update disabled: the installed
+        # package itself is the engine, so no clone of the poller repo is needed.
+        print("autoUpdate is off and this is a package install: no engine clone created.")
+        return
     proc = subprocess.run(["git", "clone", "--single-branch", "--branch", config["engineBranch"], "--",
                            config["engineRemote"], str(engine)])
     if proc.returncode != 0:
@@ -209,13 +228,19 @@ def _setup_unlocked(root: Path, *, non_interactive: bool = False, config_source:
 
     root.mkdir(parents=True, exist_ok=True)
     _ensure_engine(root, tmp_check)
-    _install_bootstrap(root)
+    has_wrapper = _install_bootstrap(root)
     installed.write_text(_to_json(tmp_check), encoding="utf-8")
-    wrapper = root / "poller.ps1"
     print(f"Installed. Settings: {installed}")
-    print(f'Start:           pwsh -File "{wrapper}"   (Ctrl+C stops)')
-    print(f'Change settings: pwsh -File "{wrapper}" setup')
-    print(f'Status:          pwsh -File "{wrapper}" status')
+    if has_wrapper:
+        wrapper = root / "poller.ps1"
+        print(f'Start:           pwsh -File "{wrapper}"   (Ctrl+C stops)')
+        print(f'Change settings: pwsh -File "{wrapper}" setup')
+        print(f'Status:          pwsh -File "{wrapper}" status')
+    else:
+        # Pure package install (pip) without the PowerShell wrapper at hand.
+        print(f'Start:           git-repo-poller start --install-root "{root}"   (Ctrl+C stops)')
+        print(f'Change settings: git-repo-poller setup --install-root "{root}"')
+        print(f'Status:          git-repo-poller status --install-root "{root}"')
     return 0
 
 

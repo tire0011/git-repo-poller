@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "git-repo-poller"
+dynamic = ["version"]
+description = "Watch one Git repository; pull changes and (re)start its program"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Rene Tittel" }]
+keywords = ["git", "watch", "poller", "ci", "agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+]
+
+[project.urls]
+Homepage = "https://github.com/tire0011/git-repo-poller"
+Repository = "https://github.com/tire0011/git-repo-poller"
+
+[project.scripts]
+git-repo-poller = "git_repo_poller.cli:main"
+
+[tool.setuptools]
+packages = ["git_repo_poller"]
+
+[tool.setuptools.dynamic]
+version = { attr = "git_repo_poller.__version__" }

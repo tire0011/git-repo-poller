@@ -24,3 +24,29 @@ jobs:
         run: |
           ./poller.ps1 check --config ./examples/config.example.json
           ./poller.ps1 check --config ./examples/config.hub.example.json
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit and package regression tests
+        run: python -m unittest discover -v -s tests -t .
+      - name: Build the release ZIP
+        run: python tools/make_zip.py
+      - name: Install the ZIP into a clean environment and smoke-test the CLI
+        run: |
+          python -m venv .venv-pkg
+          .venv-pkg/bin/pip install --disable-pip-version-check dist/git-repo-poller-*.zip
+          .venv-pkg/bin/git-repo-poller --version
+          .venv-pkg/bin/git-repo-poller check --config examples/config.example.json
+          .venv-pkg/bin/git-repo-poller check --config examples/config.hub.example.json
+      - name: Package regression tests against the installed distribution
+        env:
+          GIT_POLLER_SOURCE_ROOT: ${{ github.workspace }}
+          GIT_POLLER_TEST_VENV: ${{ github.workspace }}/.venv-pkg
+        run: |
+          cp -r tests "$RUNNER_TEMP/tests"
+          cd "$RUNNER_TEMP"
+          "$GIT_POLLER_TEST_VENV/bin/python" -m unittest discover -v -s tests -t . -p "test_package.py"

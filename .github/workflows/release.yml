@@ -1,0 +1,35 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the release ZIP
+        run: python tools/make_zip.py
+      - name: Smoke-test the ZIP in a clean environment
+        run: |
+          python -m venv .venv-release
+          .venv-release/bin/pip install --disable-pip-version-check dist/git-repo-poller-*.zip
+          .venv-release/bin/git-repo-poller --version
+          .venv-release/bin/git-repo-poller check --config examples/config.example.json
+      - name: Publish the versioned ZIP on GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF_NAME:-$(git describe --tags --abbrev=0)}"
+          notes="Install with \`pip install git-repo-poller-<version>.zip\`, or unzip and run \`python -m git_repo_poller\` / \`poller.ps1\`."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/git-repo-poller-*.zip --clobber
+          else
+            gh release create "$tag" dist/git-repo-poller-*.zip --title "$tag" --notes "$notes"
+          fi
